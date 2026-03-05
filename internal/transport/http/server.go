@@ -1,0 +1,61 @@
+package http
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+
+	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v4/middleware"
+	"go.uber.org/zap"
+)
+
+// Server defines the HTTP server interface.
+type Server interface {
+	RegisterRoutes()
+	Start(ctx context.Context) error
+	Shutdown(ctx context.Context) error
+}
+
+type server struct {
+	e      *echo.Echo
+	logger *zap.Logger
+	port   int
+}
+
+// NewServer creates a new HTTP server.
+func NewServer(port int, logger *zap.Logger) Server {
+	e := echo.New()
+	e.HideBanner = true
+	e.Use(middleware.Recover())
+	e.Use(middleware.RequestID())
+	e.Use(middleware.RequestLoggerWithConfig(middleware.RequestLoggerConfig{
+		LogStatus: true,
+		LogMethod: true,
+		LogURI:    true,
+		LogValuesFunc: func(c echo.Context, v middleware.RequestLoggerValues) error {
+			return nil
+		},
+	}))
+
+	return &server{
+		e:      e,
+		logger: logger,
+		port:   port,
+	}
+}
+
+func (s *server) RegisterRoutes() {
+	s.e.GET("/healthz", func(c echo.Context) error {
+		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+	})
+}
+
+func (s *server) Start(ctx context.Context) error {
+	addr := fmt.Sprintf(":%d", s.port)
+	return s.e.Start(addr)
+}
+
+func (s *server) Shutdown(ctx context.Context) error {
+	return s.e.Shutdown(ctx)
+}
