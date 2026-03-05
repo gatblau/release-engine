@@ -177,7 +177,7 @@ scheduling:
 | `backstage` | Catalog entity registration, scaffolder trigger, webhook receipt | E2E: register component, trigger scaffolder, receive callback |
 | `aws-iam` | Role/policy CRUD, assume-role for tenant isolation | E2E: create role, attach policy, assume role, verify access |
 | `aws-s3` | Bucket operations (used by Volta and artifact storage) | E2E: create bucket, put/get object, verify encryption |
-| `aws-eks` | Cluster auth, namespace provisioning, ArgoCD app registration | E2E: provision namespace, register ArgoCD app, verify sync |
+| `aws-eks` | Cluster auth, namespace provisioning, ArgoCD Application resource creation | E2E: provision namespace, write ArgoCD `Application` manifest to Git (via `github` connector), verify ArgoCD syncs and namespace exists in cluster |
 
 ---
 
