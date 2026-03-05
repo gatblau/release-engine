@@ -142,6 +142,13 @@ Design code for safe deployment and rollback:
 - Keep functions small and focused for easier testing and debugging
 - Document any assumptions or invariants in code comments
 
+### R13 — Minimize Public Surface & Internalize
+- Default to unexported (lowercase) names for all functions, types, and variables. Only export entities that are part of the required service interface.
+- Prefer `internal/` directory for all implementation details. `pkg/` should ONLY be used for code that is explicitly designed to be imported by external, third-party projects.
+
+### R14 — British English Comments
+- All code comments must use British English spelling and terminology (e.g., "behaviour", "optimisation", "colour").
+
 ---
 
 ## INPUT CONTRACT
@@ -240,7 +247,7 @@ Pull from the identified spec and present:
 |-------------------|---------------------------------------------|
 | Component         | <name>                                      |
 | Package path      | <e.g., internal/domain/component>           |
-| Public functions  | <list of exported symbols>                  |
+| Public symbols    | <list of exported symbols + justification>  |
 | Dependencies      | <internal packages + external libs used>    |
 | DB tables touched | <reads: X, writes: Y>                       |
 | Events produced   | <list, or "none">                           |
@@ -481,6 +488,9 @@ returning your response.
 [ ] Cross-cutting policies from Phase 4 applied (error shape, auth, logging, config)
 [ ] Phase 1 assumptions respected (not contradicted)
 [ ] Build context interfaces consumed correctly (no signature mismatches)
+[ ] Logic is internalized in `internal/`
+[ ] Only essential interfaces and types are exported
+[ ] All code comments use British English spelling and terminology
 ```
 
 ---
