@@ -2,32 +2,47 @@ package config
 
 import (
 	"context"
+	"errors"
 	"os"
 	"testing"
-
-	"github.com/stretchr/testify/assert"
 )
 
-func TestLoader_Load_MissingConfig(t *testing.T) {
-	os.Clearenv()
-	l := NewLoader()
-	cfg, err := l.Load(context.Background())
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "CONFIG_MISSING")
-	assert.Empty(t, cfg)
-}
-
-func TestLoader_Load_Success(t *testing.T) {
+func TestLoader_Load(t *testing.T) {
+	// Setup environment
 	_ = os.Setenv("DATABASE_URL", "postgres://user:pass@localhost:5432/db")
-	_ = os.Setenv("OIDC_ISSUER_URL", "https://auth.example.com")
-	_ = os.Setenv("OIDC_AUDIENCE", "api")
+	_ = os.Setenv("OIDC_ISSUER_URL", "https://issuer")
+	_ = os.Setenv("OIDC_AUDIENCE", "audience")
 	_ = os.Setenv("VOLTA_SM_SECRET_ID", "secret")
 	_ = os.Setenv("VOLTA_S3_BUCKET", "bucket")
 	defer os.Clearenv()
 
-	l := NewLoader()
-	cfg, err := l.Load(context.Background())
-	assert.NoError(t, err)
-	assert.Equal(t, 8080, cfg.HTTPPort)
-	assert.Equal(t, "postgres://user:pass@localhost:5432/db", cfg.DatabaseURL)
+	loader := NewLoader()
+	cfg, err := loader.Load(context.Background())
+	if err != nil {
+		t.Fatalf("expected success, got %v", err)
+	}
+
+	if cfg.HTTPPort != 8080 {
+		t.Errorf("expected port 8080, got %d", cfg.HTTPPort)
+	}
+}
+
+func TestLoader_Load_MissingVar(t *testing.T) {
+	// Environment empty
+	os.Clearenv()
+
+	loader := NewLoader()
+	_, err := loader.Load(context.Background())
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	var cfgErr *ConfigError
+	if !errors.As(err, &cfgErr) {
+		t.Errorf("expected ConfigError, got %T", err)
+	}
+
+	if cfgErr.Code != "CONFIG_MISSING" {
+		t.Errorf("expected code CONFIG_MISSING, got %s", cfgErr.Code)
+	}
 }

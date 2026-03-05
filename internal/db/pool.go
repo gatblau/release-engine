@@ -5,14 +5,23 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgconn"
+	"github.com/jackc/pgx/v4"
 	"github.com/jackc/pgx/v4/pgxpool"
 )
 
 // Pool manages the DB connection pool.
 type Pool interface {
-	Acquire(ctx context.Context) (*pgxpool.Conn, error)
+	Acquire(ctx context.Context) (Conn, error)
 	Ping(ctx context.Context) error
 	Close()
+}
+
+type Conn interface {
+	Query(ctx context.Context, sql string, args ...interface{}) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...interface{}) pgx.Row
+	Exec(ctx context.Context, sql string, arguments ...interface{}) (pgconn.CommandTag, error)
+	Release()
 }
 
 type pool struct {
@@ -31,14 +40,15 @@ func NewPool(dbURL string) (Pool, error) {
 
 	db, err := pgxpool.ConnectConfig(context.Background(), config)
 	if err != nil {
-		return nil, fmt.Errorf("DB_UNAVAILABLE: %w", err)
+		return nil, &DBError{Err: ErrDBUnavailable, Code: "DB_UNAVAILABLE", Detail: map[string]string{"error": err.Error()}}
 	}
 
 	return &pool{db: db}, nil
 }
 
-func (p *pool) Acquire(ctx context.Context) (*pgxpool.Conn, error) {
-	return p.db.Acquire(ctx)
+func (p *pool) Acquire(ctx context.Context) (Conn, error) {
+	c, err := p.db.Acquire(ctx)
+	return c, err
 }
 
 func (p *pool) Ping(ctx context.Context) error {

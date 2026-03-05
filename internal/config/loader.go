@@ -45,27 +45,27 @@ func (l *loader) Load(ctx context.Context) (Config, error) {
 
 	dbURL, err := getRequired("DATABASE_URL")
 	if err != nil {
-		return Config{}, fmt.Errorf("CONFIG_MISSING: %w", err)
+		return Config{}, &ConfigError{Err: ErrConfigMissing, Code: "CONFIG_MISSING", Detail: map[string]string{"var": "DATABASE_URL"}}
 	}
 
 	oidcIssuer, err := getRequired("OIDC_ISSUER_URL")
 	if err != nil {
-		return Config{}, fmt.Errorf("CONFIG_MISSING: %w", err)
+		return Config{}, &ConfigError{Err: ErrConfigMissing, Code: "CONFIG_MISSING", Detail: map[string]string{"var": "OIDC_ISSUER_URL"}}
 	}
 
 	oidcAudience, err := getRequired("OIDC_AUDIENCE")
 	if err != nil {
-		return Config{}, fmt.Errorf("CONFIG_MISSING: %w", err)
+		return Config{}, &ConfigError{Err: ErrConfigMissing, Code: "CONFIG_MISSING", Detail: map[string]string{"var": "OIDC_AUDIENCE"}}
 	}
 
 	voltaSMSecretID, err := getRequired("VOLTA_SM_SECRET_ID")
 	if err != nil {
-		return Config{}, fmt.Errorf("CONFIG_MISSING: %w", err)
+		return Config{}, &ConfigError{Err: ErrConfigMissing, Code: "CONFIG_MISSING", Detail: map[string]string{"var": "VOLTA_SM_SECRET_ID"}}
 	}
 
 	voltaS3Bucket, err := getRequired("VOLTA_S3_BUCKET")
 	if err != nil {
-		return Config{}, fmt.Errorf("CONFIG_MISSING: %w", err)
+		return Config{}, &ConfigError{Err: ErrConfigMissing, Code: "CONFIG_MISSING", Detail: map[string]string{"var": "VOLTA_S3_BUCKET"}}
 	}
 
 	httpPortStr := os.Getenv("HTTP_PORT")
@@ -74,7 +74,7 @@ func (l *loader) Load(ctx context.Context) (Config, error) {
 	}
 	httpPort, err := strconv.Atoi(httpPortStr)
 	if err != nil {
-		return Config{}, fmt.Errorf("CONFIG_INVALID: invalid HTTP_PORT: %w", err)
+		return Config{}, &ConfigError{Err: ErrConfigInvalid, Code: "CONFIG_INVALID", Detail: map[string]string{"var": "HTTP_PORT"}}
 	}
 
 	return Config{

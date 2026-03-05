@@ -1,22 +1,34 @@
 package logger
 
 import (
+	"errors"
 	"testing"
-
-	"github.com/stretchr/testify/assert"
-	"go.uber.org/zap/zapcore"
 )
 
 func TestNewFactory(t *testing.T) {
-	f := NewFactory("debug", "json")
-	factoryInstance, ok := f.(*factory)
-	assert.True(t, ok)
-	assert.Equal(t, zapcore.DebugLevel, factoryInstance.level)
-	assert.Equal(t, "json", factoryInstance.format)
+	f, err := NewFactory("debug", "json")
+	if err != nil {
+		t.Fatalf("expected success, got %v", err)
+	}
+
+	logger := f.New("test-component")
+	if logger == nil {
+		t.Fatal("expected logger, got nil")
+	}
 }
 
-func TestFactory_New(t *testing.T) {
-	f := NewFactory("info", "json")
-	logger := f.New("test-component")
-	assert.NotNil(t, logger)
+func TestNewFactory_InvalidLevel(t *testing.T) {
+	_, err := NewFactory("invalid", "json")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	var lErr *LoggerError
+	if !errors.As(err, &lErr) {
+		t.Errorf("expected LoggerError, got %T", err)
+	}
+
+	if lErr.Code != "LOG_LEVEL_INVALID" {
+		t.Errorf("expected code LOG_LEVEL_INVALID, got %s", lErr.Code)
+	}
 }

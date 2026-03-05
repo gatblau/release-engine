@@ -18,16 +18,16 @@ type factory struct {
 }
 
 // NewFactory creates a new logger factory.
-func NewFactory(level string, format string) Factory {
+func NewFactory(level string, format string) (Factory, error) {
 	lvl := zapcore.InfoLevel
 	if err := lvl.UnmarshalText([]byte(level)); err != nil {
-		lvl = zapcore.InfoLevel
+		return nil, &LoggerError{Err: ErrLogLevelInvalid, Code: "LOG_LEVEL_INVALID", Detail: map[string]string{"level": level}}
 	}
 
 	return &factory{
 		level:  lvl,
 		format: format,
-	}
+	}, nil
 }
 
 // New creates a new component-scoped logger.

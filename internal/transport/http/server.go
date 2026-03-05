@@ -64,9 +64,15 @@ func (s *server) RegisterRoutes() {
 
 func (s *server) Start(ctx context.Context) error {
 	addr := fmt.Sprintf(":%d", s.port)
-	return s.e.Start(addr)
+	if err := s.e.Start(addr); err != nil && err != http.ErrServerClosed {
+		return &HTTPError{Err: ErrHTTPBindFailed, Code: "HTTP_BIND_FAILED", Detail: map[string]string{"addr": addr, "error": err.Error()}}
+	}
+	return nil
 }
 
 func (s *server) Shutdown(ctx context.Context) error {
-	return s.e.Shutdown(ctx)
+	if err := s.e.Shutdown(ctx); err != nil {
+		return &HTTPError{Err: ErrHTTPShutdownTimeout, Code: "HTTP_SHUTDOWN_TIMEOUT", Detail: map[string]string{"error": err.Error()}}
+	}
+	return nil
 }

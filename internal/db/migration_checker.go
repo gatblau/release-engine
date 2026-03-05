@@ -2,7 +2,6 @@ package db
 
 import (
 	"context"
-	"fmt"
 )
 
 // MigrationChecker verifies schema version.
@@ -30,7 +29,7 @@ func (m *migrationChecker) CurrentVersion(ctx context.Context) (string, error) {
 	var version string
 	err = conn.QueryRow(ctx, "SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1").Scan(&version)
 	if err != nil {
-		return "", fmt.Errorf("MIGRATION_METADATA_MISSING: %w", err)
+		return "", &MigrationError{Err: ErrMigrationMetadata, Code: "MIGRATION_METADATA_MISSING", Detail: map[string]string{"error": err.Error()}}
 	}
 	return version, nil
 }
