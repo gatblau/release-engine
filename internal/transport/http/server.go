@@ -46,9 +46,20 @@ func NewServer(port int, logger *zap.Logger) Server {
 }
 
 func (s *server) RegisterRoutes() {
+	jobHandler := NewJobHandler()
+
 	s.e.GET("/healthz", func(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	})
+	s.e.GET("/readyz", func(c echo.Context) error {
+		// TODO: Implement readiness check
+		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+	})
+
+	api := s.e.Group("/v1", AuthMiddleware, RateLimiter)
+	api.POST("/jobs", jobHandler.CreateJob)
+	api.GET("/jobs/:id", jobHandler.GetJob)
+	api.POST("/jobs/:id/cancel", jobHandler.CancelJob)
 }
 
 func (s *server) Start(ctx context.Context) error {
