@@ -9,14 +9,34 @@ import (
 	"github.com/joho/godotenv"
 )
 
+// VoltaEnvType defines the type of environment for Volta (dev or prod)
+type VoltaEnvType string
+
+const (
+	VoltaEnvDev  VoltaEnvType = "dev"
+	VoltaEnvProd VoltaEnvType = "prod"
+)
+
+// VoltaStorageType defines the storage backend for Volta (s3 or file)
+type VoltaStorageType string
+
+const (
+	VoltaStorageS3   VoltaStorageType = "s3"
+	VoltaStorageFile VoltaStorageType = "file"
+)
+
 // Config holds immutable runtime configuration.
 type Config struct {
-	HTTPPort        int
-	DatabaseURL     string
-	OIDCIssuerURL   string
-	OIDCAudience    string
-	VoltaSMSecretID string
-	VoltaS3Bucket   string
+	HTTPPort              int
+	DatabaseURL           string
+	OIDCIssuerURL         string
+	OIDCAudience          string
+	VoltaEnvType          VoltaEnvType
+	VoltaStorage          VoltaStorageType
+	VoltaSMSecretID       string
+	VoltaS3Bucket         string
+	VoltaFilePath         string
+	VoltaPassphraseEnvVar string
 }
 
 // Loader loads and validates configuration.
@@ -77,12 +97,38 @@ func (l *loader) Load(ctx context.Context) (Config, error) {
 		return Config{}, &ConfigError{Err: ErrConfigInvalid, Code: "CONFIG_INVALID", Detail: map[string]string{"var": "HTTP_PORT"}}
 	}
 
+	// Load Volta environment type (defaults to prod for security)
+	voltaEnv := VoltaEnvType(os.Getenv("VOLTA_ENV"))
+	if voltaEnv == "" {
+		voltaEnv = VoltaEnvProd // Default to production for security
+	}
+
+	// Load Volta storage type (defaults to s3)
+	voltaStorage := VoltaStorageType(os.Getenv("VOLTA_STORAGE"))
+	if voltaStorage == "" {
+		voltaStorage = VoltaStorageS3 // Default to S3 for durability
+	}
+
+	// Load optional Volta file path (for file storage mode)
+	voltaFilePath := os.Getenv("VOLTA_FILE_PATH")
+
+	// Load optional Volta passphrase environment variable name
+	// nolint:gosec // G101: This is a configuration key (env var name), not an actual secret value
+	voltaPassphraseEnvVar := os.Getenv("VOLTA_PASSPHRASE_ENV_VAR")
+	if voltaPassphraseEnvVar == "" {
+		voltaPassphraseEnvVar = "VOLTA_MASTER_PASSPHRASE" //nolint:gosec // G101: This is a configuration key (env var name), not an actual secret value
+	}
+
 	return Config{
-		HTTPPort:        httpPort,
-		DatabaseURL:     dbURL,
-		OIDCIssuerURL:   oidcIssuer,
-		OIDCAudience:    oidcAudience,
-		VoltaSMSecretID: voltaSMSecretID,
-		VoltaS3Bucket:   voltaS3Bucket,
+		HTTPPort:              httpPort,
+		DatabaseURL:           dbURL,
+		OIDCIssuerURL:         oidcIssuer,
+		OIDCAudience:          oidcAudience,
+		VoltaEnvType:          voltaEnv,
+		VoltaStorage:          voltaStorage,
+		VoltaSMSecretID:       voltaSMSecretID,
+		VoltaS3Bucket:         voltaS3Bucket,
+		VoltaFilePath:         voltaFilePath,
+		VoltaPassphraseEnvVar: voltaPassphraseEnvVar,
 	}, nil
 }

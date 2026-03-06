@@ -2,6 +2,11 @@
   <img src="docs/logo/re.png" alt="Release Engine Logo" width="150" />
 </p>
 
+![Tests](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/gatblau/release-engine/main/.github/badges/tests.json&cacheSeconds=0)
+![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/gatblau/release-engine/main/.github/badges/coverage.json&cacheSeconds=0)
+![Lint](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/gatblau/release-engine/main/.github/badges/lint.json&cacheSeconds=0)
+![Security](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/gatblau/release-engine/main/.github/badges/security.json&cacheSeconds=0)
+
 # Release Engine
 
 Release Engine is a durable, multi-tenant (modular-monolith) service designed to orchestrate asynchronous release and platform automation workflows. 
