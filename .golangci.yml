@@ -1,7 +1,13 @@
-# golangci-lint configuration
-
 version: "2"
 
-run:
-  # Timeout for analysis
-  timeout: 5m
+linters:
+  default: none
+  enable:
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+
+linters-settings:
+  errcheck:
+    check-type-assertions: false

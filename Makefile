@@ -5,7 +5,7 @@
 # Check if golangci-lint is installed, if not install it
 lint-check:
 	@echo "Checking if golangci-lint is installed..."
-	@which golangci-lint || (echo "Installing golangci-lint..." && go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.5)
+	@which golangci-lint || (echo "Installing golangci-lint..." && go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest)
 
 # Run golangci-lint
 lint: lint-check
@@ -15,7 +15,7 @@ lint: lint-check
 # Run tests with coverage
 test:
 	@echo "Running tests with coverage..."
-	@go test -coverprofile=coverage.out ./...
+	@go test -tags=integration -coverprofile=coverage.out ./...
 	@go tool cover -func=coverage.out
 
 # Run security checks (go install github.com/securego/gosec/v2/cmd/gosec@latest)

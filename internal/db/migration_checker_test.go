@@ -4,32 +4,36 @@ import (
 	"context"
 	"testing"
 
-	"github.com/jackc/pgx/v4/pgxpool"
-
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
 
-type MockPool struct {
+func TestMigrationChecker_CurrentVersion(t *testing.T) {
+	mockPool := new(MockPool)
+	mockConn := new(MockConn)
+	checker := NewMigrationChecker(mockPool)
+
+	ctx := context.Background()
+
+	// Expectations
+	mockRow := new(mockRow)
+	mockRow.On("Scan", mock.Anything).Return(nil)
+
+	mockPool.On("Acquire", ctx).Return(mockConn, nil)
+	mockConn.On("QueryRow", ctx, "SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1", mock.Anything).Return(mockRow)
+	mockConn.On("Release").Return()
+
+	version, err := checker.CurrentVersion(ctx)
+	assert.NoError(t, err)
+	assert.Equal(t, "", version)
+}
+
+// Mock for pgx.Row
+type mockRow struct {
 	mock.Mock
 }
 
-func (m *MockPool) Acquire(ctx context.Context) (*pgxpool.Conn, error) {
-	args := m.Called(ctx)
-	return args.Get(0).(*pgxpool.Conn), args.Error(1)
-}
-
-func (m *MockPool) Ping(ctx context.Context) error {
-	args := m.Called(ctx)
-	return args.Error(0)
-}
-
-func (m *MockPool) Close() {
-	m.Called()
-}
-
-func TestMigrationChecker_CurrentVersion(t *testing.T) {
-	// This is hard to test without a real DB or complex mocking of pgxpool.Conn
-	// Given the constraints and typical testing patterns for such components,
-	// a lightweight integration test or just accepting mock limitations is best.
-	// I will skip complex unit test for MigrationChecker as CurrentVersion depends on pgx internals.
+func (m *mockRow) Scan(dest ...interface{}) error {
+	*dest[0].(*string) = ""
+	return m.Called(dest...).Error(0)
 }

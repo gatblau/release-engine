@@ -22,43 +22,57 @@ jobs:
           cache: false
 
       - name: Run lint
+        id: lint
+        uses: golangci/golangci-lint-action@v7
+        with:
+          version: latest
+        continue-on-error: true
+
+      - name: Set lint status
         run: |
-          make lint
-          LINT_STATUS="passing"
-          echo "LINT_STATUS=$LINT_STATUS" >> $GITHUB_ENV
-          echo "LINT_COLOR=brightgreen" >> $GITHUB_ENV
+          if [ "${{ steps.lint.outcome }}" == "success" ]; then
+            echo "LINT_STATUS=passing" >> $GITHUB_ENV
+            echo "LINT_COLOR=brightgreen" >> $GITHUB_ENV
+          else
+            echo "LINT_STATUS=failing" >> $GITHUB_ENV
+            echo "LINT_COLOR=red" >> $GITHUB_ENV
+          fi
 
       - name: Run security check
+        id: security
+        run: make security
+        continue-on-error: true
+
+      - name: Set security status
         run: |
-          make security
-          SECURITY_STATUS="passing"
-          echo "SECURITY_STATUS=$SECURITY_STATUS" >> $GITHUB_ENV
-          echo "SECURITY_COLOR=brightgreen" >> $GITHUB_ENV
+          if [ "${{ steps.security.outcome }}" == "success" ]; then
+            echo "SECURITY_STATUS=passing" >> $GITHUB_ENV
+            echo "SECURITY_COLOR=brightgreen" >> $GITHUB_ENV
+          else
+            echo "SECURITY_STATUS=failing" >> $GITHUB_ENV
+            echo "SECURITY_COLOR=red" >> $GITHUB_ENV
+          fi
 
       - name: Run tests with coverage
+        id: tests
         run: |
-          # Allow test command to fail without exiting the script
           set +e
           make test
           TEST_EXIT_CODE=$?
           set -e
 
-          # Debug: show raw output if tests failed
           if [ $TEST_EXIT_CODE -ne 0 ]; then
             echo "::warning::Tests exited with code $TEST_EXIT_CODE"
           fi
 
-          # Get coverage (with fallback if no coverage)
           if [ -f coverage.out ]; then
             COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print substr($3, 1, length($3)-1)}')
           else
             COVERAGE="0"
           fi
 
-          # Set environment variables
           echo "COVERAGE=$COVERAGE" >> $GITHUB_ENV
-          
-          # Determine colors and status
+
           if [ $TEST_EXIT_CODE -eq 0 ]; then
             echo "TEST_STATUS=passing" >> $GITHUB_ENV
             echo "TEST_COLOR=brightgreen" >> $GITHUB_ENV
@@ -67,7 +81,6 @@ jobs:
             echo "TEST_COLOR=red" >> $GITHUB_ENV
           fi
 
-          # Coverage color
           COVERAGE_INT=$(echo "$COVERAGE" | awk '{print int($1)}')
           if [ $COVERAGE_INT -ge 80 ]; then
             echo "COVERAGE_COLOR=brightgreen" >> $GITHUB_ENV
@@ -77,10 +90,10 @@ jobs:
             echo "COVERAGE_COLOR=red" >> $GITHUB_ENV
           fi
 
-          # Fail the step if tests actually failed
           if [ $TEST_EXIT_CODE -ne 0 ]; then
             exit 1
           fi
+        continue-on-error: true
 
       - name: Update badge data
         if: github.ref == 'refs/heads/main' && github.event_name == 'push' && always()
@@ -104,7 +117,7 @@ jobs:
             "color": "$COVERAGE_COLOR"
           }
           EOF
-          
+
           cat > .github/badges/lint.json << EOF
           {
             "schemaVersion": 1,
@@ -137,4 +150,14 @@ jobs:
           else
             git commit -m "update badges: tests $TEST_STATUS, coverage ${COVERAGE}%, lint $LINT_STATUS, security $SECURITY_STATUS"
             git push
+          fi
+
+      - name: Fail if any check failed
+        if: always()
+        run: |
+          if [ "${{ steps.lint.outcome }}" == "failure" ] || \
+             [ "${{ steps.security.outcome }}" == "failure" ] || \
+             [ "${{ steps.tests.outcome }}" == "failure" ]; then
+            echo "One or more checks failed"
+            exit 1
           fi
