@@ -2,12 +2,10 @@ module github.com/gatblau/release-engine
 
 go 1.25.7
 
-replace github.com/gatblau/volta => ../volta
-
 require (
 	github.com/aws/aws-sdk-go-v2/config v1.32.11
 	github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.41.3
-	github.com/gatblau/volta v0.0.0-20260305203153-afa5bb1d69be
+	github.com/gatblau/volta v0.1.0
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgconn v1.14.3
 	github.com/jackc/pgx/v4 v4.18.3
@@ -66,6 +64,5 @@ require (
 	golang.org/x/sys v0.41.0 // indirect
 	golang.org/x/text v0.34.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
-	golang.org/x/tools v0.42.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
