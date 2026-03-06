@@ -2,10 +2,10 @@
   <img src="docs/logo/re.png" alt="Release Engine Logo" width="150" />
 </p>
 
-![Tests](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/gatblau/release-engine/main/.github/badges/tests.json&cacheSeconds=0)
-![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/gatblau/release-engine/main/.github/badges/coverage.json&cacheSeconds=0)
-![Lint](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/gatblau/release-engine/main/.github/badges/lint.json&cacheSeconds=0)
-![Security](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/gatblau/release-engine/main/.github/badges/security.json&cacheSeconds=0)
+![Tests](https://github.com/gatblau/release-engine/blob/main/.github/badges/tests.json&cacheSeconds=0)
+![Coverage](https://github.com/gatblau/release-engine/blob/main/.github/badges/coverage.json&cacheSeconds=0)
+![Lint](https://github.com/gatblau/release-engine/blob/main/.github/badges/lint.json&cacheSeconds=0)
+![Security](https://github.com/gatblau/release-engine/blob/main/.github/badges/security.json&cacheSeconds=0)
 
 # Release Engine
 
