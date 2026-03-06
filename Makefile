@@ -2,8 +2,13 @@
 
 .PHONY: lint test security
 
+# Check if golangci-lint is installed, if not install it
+lint-check:
+	@echo "Checking if golangci-lint is installed..."
+	@which golangci-lint || (echo "Installing golangci-lint..." && go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.55.1)
+
 # Run golangci-lint
-lint:
+lint: lint-check
 	@echo "Running linter..."
 	@golangci-lint run ./...
 
