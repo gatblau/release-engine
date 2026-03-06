@@ -1,0 +1,11 @@
+# golangci-lint configuration
+
+version: "2"
+
+run:
+  # Skip the local volta replacement
+  skip-dirs:
+    - ../volta
+
+  # Timeout for analysis
+  timeout: 5m
