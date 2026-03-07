@@ -43,9 +43,36 @@ type TracingConfig struct {
 	Insecure     bool
 }
 
+// Option is a functional option for configuring TracingService.
+type Option func(*TracingService) error
+
+// WithTracerProvider sets a custom tracer provider for testing.
+func WithTracerProvider(provider *sdktrace.TracerProvider) Option {
+	return func(ts *TracingService) error {
+		ts.provider = provider
+		ts.tracer = provider.Tracer(ts.serviceName)
+		ts.shutdownFn = provider.Shutdown
+		return nil
+	}
+}
+
+// WithNoopProvider creates a no-op tracer provider for testing without OTLP endpoint.
+func WithNoopProvider() Option {
+	return func(ts *TracingService) error {
+		provider := sdktrace.NewTracerProvider()
+		ts.provider = provider
+		ts.tracer = provider.Tracer(ts.serviceName)
+		ts.shutdownFn = func(ctx context.Context) error {
+			return nil // Noop shutdown
+		}
+		return nil
+	}
+}
+
 // NewTracingService creates a new TracingService.
 // Implements Phase 3: TracingService spec - initialise OpenTelemetry tracing.
-func NewTracingService(logger *zap.Logger, config *TracingConfig) (*TracingService, error) {
+// Use WithNoopProvider() option for testing without an OTLP endpoint.
+func NewTracingService(logger *zap.Logger, config *TracingConfig, opts ...Option) (*TracingService, error) {
 	if config == nil {
 		config = &TracingConfig{}
 	}
@@ -64,6 +91,34 @@ func NewTracingService(logger *zap.Logger, config *TracingConfig) (*TracingServi
 	}
 	if config.SampleRatio <= 0 {
 		config.SampleRatio = 0.1 // 10% steady-state sampling
+	}
+
+	// Create a basic service first
+	ts := &TracingService{
+		logger:      logger,
+		serviceName: config.ServiceName,
+		environment: config.Environment,
+		version:     config.Version,
+		sampleRatio: config.SampleRatio,
+	}
+
+	// Apply options first - if WithNoopProvider or WithTracerProvider is used,
+	// we skip OTLP initialization
+	for _, opt := range opts {
+		if err := opt(ts); err != nil {
+			return nil, err
+		}
+	}
+
+	// If provider is already set by options, we're done
+	if ts.provider != nil {
+		logger.Info("tracing.start",
+			zap.String("component", "TracingService"),
+			zap.String("service", config.ServiceName),
+			zap.String("environment", config.Environment),
+			zap.Float64("sample_ratio", config.SampleRatio),
+			zap.String("endpoint", "noop"))
+		return ts, nil
 	}
 
 	// Create OTLP exporter
@@ -121,18 +176,9 @@ func NewTracingService(logger *zap.Logger, config *TracingConfig) (*TracingServi
 		propagation.Baggage{},
 	))
 
-	tracer := provider.Tracer(config.ServiceName)
-
-	ts := &TracingService{
-		logger:      logger,
-		tracer:      tracer,
-		provider:    provider,
-		serviceName: config.ServiceName,
-		environment: config.Environment,
-		version:     config.Version,
-		sampleRatio: config.SampleRatio,
-		shutdownFn:  provider.Shutdown,
-	}
+	ts.provider = provider
+	ts.tracer = provider.Tracer(config.ServiceName)
+	ts.shutdownFn = provider.Shutdown
 
 	logger.Info("tracing.start",
 		zap.String("component", "TracingService"),
