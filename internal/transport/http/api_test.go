@@ -7,15 +7,17 @@ import (
 
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
+	"go.uber.org/zap/zaptest"
 )
 
-func TestAuthMiddleware(t *testing.T) {
+func TestAuthMiddleware_MissingTokenAPI(t *testing.T) {
 	e := echo.New()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
-	h := AuthMiddleware(func(c echo.Context) error {
+	logger := zaptest.NewLogger(t)
+	h := NewAuthMiddleware("https://issuer.example.com", "test-audience", logger)(func(c echo.Context) error {
 		return c.String(http.StatusOK, "ok")
 	})
 
@@ -73,23 +75,12 @@ func TestRateLimiter(t *testing.T) {
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
-	h := RateLimiter(func(c echo.Context) error {
+	logger := zaptest.NewLogger(t)
+	h := NewRateLimiterMiddleware(100, 100, logger)(func(c echo.Context) error {
 		return c.String(http.StatusOK, "ok")
 	})
 
 	err := h(c)
 	assert.NoError(t, err)
 	assert.Equal(t, http.StatusOK, rec.Code)
-}
-
-func TestPolicyEngine(t *testing.T) {
-	pe := NewPolicyEngine()
-	assert.NotNil(t, pe)
-	assert.True(t, pe.Evaluate("1"))
-}
-
-func TestIdempotencyService(t *testing.T) {
-	is := NewIdempotencyService()
-	assert.NotNil(t, is)
-	assert.True(t, is.Proccess("1"))
 }

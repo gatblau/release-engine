@@ -10,6 +10,7 @@ var (
 	ErrHTTPShutdownTimeout = errors.New("shutdown timed out")
 )
 
+// HTTPError represents an HTTP-specific error.
 type HTTPError struct {
 	Err    error
 	Code   string
@@ -22,4 +23,11 @@ func (e *HTTPError) Error() string {
 
 func (e *HTTPError) Unwrap() error {
 	return e.Err
+}
+
+// ErrorResponse is the standard API error envelope.
+type ErrorResponse struct {
+	Error   string `json:"error"`
+	Code    string `json:"code"`
+	Details any    `json:"details,omitempty"`
 }

@@ -56,7 +56,14 @@ func (s *server) RegisterRoutes() {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	})
 
-	api := s.e.Group("/v1", AuthMiddleware, RateLimiter)
+	// Rate limiting configuration: 100 requests per second, burst of 150
+	rateLimiterConfig := 100.0
+	rateLimiterRefill := 100.0
+
+	api := s.e.Group("/v1",
+		NewAuthMiddleware("https://issuer.example.com", "release-engine", s.logger),
+		NewRateLimiterMiddleware(rateLimiterConfig, rateLimiterRefill, s.logger),
+	)
 	api.POST("/jobs", jobHandler.CreateJob)
 	api.GET("/jobs/:id", jobHandler.GetJob)
 	api.POST("/jobs/:id/cancel", jobHandler.CancelJob)

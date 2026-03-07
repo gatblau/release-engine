@@ -47,7 +47,7 @@ func TestMetricsSQLWriter_WriteEvent_ClosedWriter(t *testing.T) {
 	writer := NewMetricsSQLWriter(logger, mockPool, 100, 1)
 
 	// Close the writer first
-	writer.Close()
+	_ = writer.Close()
 
 	// Try to write to closed writer
 	event := MetricsEvent{
@@ -121,7 +121,7 @@ func TestMetricsSQLWriter_GetQueueLength(t *testing.T) {
 	assert.GreaterOrEqual(t, writer.GetQueueLength(), 0)
 
 	// Cleanup
-	writer.Close()
+	_ = writer.Close()
 }
 
 func TestMetricsSQLWriter_GetQueueCapacity(t *testing.T) {
@@ -131,7 +131,7 @@ func TestMetricsSQLWriter_GetQueueCapacity(t *testing.T) {
 	writer := NewMetricsSQLWriter(logger, mockPool, 500, 1)
 	assert.Equal(t, 500, writer.GetQueueCapacity())
 
-	writer.Close()
+	_ = writer.Close()
 }
 
 func TestMetricsSQLWriter_Close_AlreadyClosed(t *testing.T) {

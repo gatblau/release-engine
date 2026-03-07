@@ -57,8 +57,8 @@ func TestNewManager(t *testing.T) {
 
 	// Save original env var and restore after test
 	originalEnv := os.Getenv("VOLTA_MASTER_PASSPHRASE")
-	os.Setenv("VOLTA_MASTER_PASSPHRASE", "test-passphrase")
-	defer os.Setenv("VOLTA_MASTER_PASSPHRASE", originalEnv)
+	_ = os.Setenv("VOLTA_MASTER_PASSPHRASE", "test-passphrase")
+	defer func() { _ = os.Setenv("VOLTA_MASTER_PASSPHRASE", originalEnv) }()
 
 	manager, err := NewManager(logger, cfg)
 	if err != nil {
@@ -103,8 +103,8 @@ func TestNewManagerWithDeps(t *testing.T) {
 		secretValue: "test-secret",
 	}
 
-	os.Setenv("VOLTA_MASTER_PASSPHRASE", "test-passphrase")
-	defer os.Unsetenv("VOLTA_MASTER_PASSPHRASE")
+	_ = os.Setenv("VOLTA_MASTER_PASSPHRASE", "test-passphrase")
+	defer func() { _ = os.Unsetenv("VOLTA_MASTER_PASSPHRASE") }()
 
 	manager, err := NewManagerWithDeps(logger, cfg, factory, smClient)
 	if err != nil {
@@ -141,8 +141,8 @@ func TestNewManagerWithDeps_FactoryError(t *testing.T) {
 		secretValue: "test-secret",
 	}
 
-	os.Setenv("VOLTA_MASTER_PASSPHRASE", "test-passphrase")
-	defer os.Unsetenv("VOLTA_MASTER_PASSPHRASE")
+	_ = os.Setenv("VOLTA_MASTER_PASSPHRASE", "test-passphrase")
+	defer func() { _ = os.Unsetenv("VOLTA_MASTER_PASSPHRASE") }()
 
 	_, err := NewManagerWithDeps(logger, cfg, factory, smClient)
 	if err == nil {
@@ -158,14 +158,14 @@ func TestNewManager_WithSSL(t *testing.T) {
 	}
 
 	// Set env vars
-	os.Setenv("VOLTA_MASTER_PASSPHRASE", "test-passphrase")
-	os.Setenv("AWS_USE_SSL", "true")
-	os.Setenv("AWS_REGION", "us-west-2")
-	os.Setenv("AWS_ENDPOINT", "s3.amazonaws.com")
-	defer os.Unsetenv("VOLTA_MASTER_PASSPHRASE")
-	defer os.Unsetenv("AWS_USE_SSL")
-	defer os.Unsetenv("AWS_REGION")
-	defer os.Unsetenv("AWS_ENDPOINT")
+	_ = os.Setenv("VOLTA_MASTER_PASSPHRASE", "test-passphrase")
+	_ = os.Setenv("AWS_USE_SSL", "true")
+	_ = os.Setenv("AWS_REGION", "us-west-2")
+	_ = os.Setenv("AWS_ENDPOINT", "s3.amazonaws.com")
+	defer func() { _ = os.Unsetenv("VOLTA_MASTER_PASSPHRASE") }()
+	defer func() { _ = os.Unsetenv("AWS_USE_SSL") }()
+	defer func() { _ = os.Unsetenv("AWS_REGION") }()
+	defer func() { _ = os.Unsetenv("AWS_ENDPOINT") }()
 
 	manager, err := NewManager(logger, cfg)
 	if err != nil {
@@ -185,9 +185,9 @@ func TestNewManager_DefaultRegion(t *testing.T) {
 	}
 
 	// Set env vars (no region)
-	os.Setenv("VOLTA_MASTER_PASSPHRASE", "test-passphrase")
-	os.Unsetenv("AWS_REGION")
-	defer os.Setenv("VOLTA_MASTER_PASSPHRASE", "")
+	_ = os.Setenv("VOLTA_MASTER_PASSPHRASE", "test-passphrase")
+	_ = os.Unsetenv("AWS_REGION")
+	defer func() { _ = os.Setenv("VOLTA_MASTER_PASSPHRASE", "") }()
 
 	manager, err := NewManager(logger, cfg)
 	if err != nil {
@@ -206,14 +206,14 @@ func TestNewManager_WithCustomS3Config(t *testing.T) {
 		VoltaStorage:  appconfig.VoltaStorageS3,
 	}
 
-	os.Setenv("VOLTA_MASTER_PASSPHRASE", "test-passphrase")
-	os.Setenv("AWS_REGION", "eu-west-1")
-	os.Setenv("AWS_ENDPOINT", "s3.eu-west-1.amazonaws.com")
-	os.Setenv("AWS_USE_SSL", "true")
-	defer os.Unsetenv("VOLTA_MASTER_PASSPHRASE")
-	defer os.Unsetenv("AWS_REGION")
-	defer os.Unsetenv("AWS_ENDPOINT")
-	defer os.Unsetenv("AWS_USE_SSL")
+	_ = os.Setenv("VOLTA_MASTER_PASSPHRASE", "test-passphrase")
+	_ = os.Setenv("AWS_REGION", "eu-west-1")
+	_ = os.Setenv("AWS_ENDPOINT", "s3.eu-west-1.amazonaws.com")
+	_ = os.Setenv("AWS_USE_SSL", "true")
+	defer func() { _ = os.Unsetenv("VOLTA_MASTER_PASSPHRASE") }()
+	defer func() { _ = os.Unsetenv("AWS_REGION") }()
+	defer func() { _ = os.Unsetenv("AWS_ENDPOINT") }()
+	defer func() { _ = os.Unsetenv("AWS_USE_SSL") }()
 
 	manager, err := NewManager(logger, cfg)
 	if err != nil {
@@ -234,8 +234,8 @@ func TestManager_Init_WithEnvPassphrase(t *testing.T) {
 	factory := &mockVaultManagerFactory{}
 	smClient := &mockSecretsManagerClient{}
 
-	os.Setenv("VOLTA_MASTER_PASSPHRASE", "test-passphrase")
-	defer os.Unsetenv("VOLTA_MASTER_PASSPHRASE")
+	_ = os.Setenv("VOLTA_MASTER_PASSPHRASE", "test-passphrase")
+	defer func() { _ = os.Unsetenv("VOLTA_MASTER_PASSPHRASE") }()
 
 	manager := &Manager{
 		logger:              logger,
@@ -265,7 +265,7 @@ func TestManager_Init_WithSecretsManager(t *testing.T) {
 	}
 
 	// Make sure env passphrase is NOT set
-	os.Unsetenv("VOLTA_MASTER_PASSPHRASE")
+	_ = os.Unsetenv("VOLTA_MASTER_PASSPHRASE")
 
 	manager := &Manager{
 		logger:              logger,
@@ -295,7 +295,7 @@ func TestManager_Init_SecretsManagerError(t *testing.T) {
 	}
 
 	// Make sure env passphrase is NOT set
-	os.Unsetenv("VOLTA_MASTER_PASSPHRASE")
+	_ = os.Unsetenv("VOLTA_MASTER_PASSPHRASE")
 
 	manager := &Manager{
 		logger:              logger,
@@ -325,7 +325,7 @@ func TestManager_Init_EmptySecret(t *testing.T) {
 	}
 
 	// Make sure env passphrase is NOT set
-	os.Unsetenv("VOLTA_MASTER_PASSPHRASE")
+	_ = os.Unsetenv("VOLTA_MASTER_PASSPHRASE")
 
 	manager := &Manager{
 		logger:              logger,
@@ -350,8 +350,8 @@ func TestManager_CloseAll(t *testing.T) {
 		VoltaS3Bucket: "test-bucket",
 	}
 
-	os.Setenv("VOLTA_MASTER_PASSPHRASE", "test-passphrase")
-	defer os.Unsetenv("VOLTA_MASTER_PASSPHRASE")
+	_ = os.Setenv("VOLTA_MASTER_PASSPHRASE", "test-passphrase")
+	defer func() { _ = os.Unsetenv("VOLTA_MASTER_PASSPHRASE") }()
 
 	manager := &Manager{
 		logger:              logger,
@@ -375,8 +375,8 @@ func TestManager_GetVaultManager(t *testing.T) {
 		VoltaStorage:  appconfig.VoltaStorageS3,
 	}
 
-	os.Setenv("VOLTA_MASTER_PASSPHRASE", "test-passphrase")
-	defer os.Unsetenv("VOLTA_MASTER_PASSPHRASE")
+	_ = os.Setenv("VOLTA_MASTER_PASSPHRASE", "test-passphrase")
+	defer func() { _ = os.Unsetenv("VOLTA_MASTER_PASSPHRASE") }()
 
 	manager, err := NewManager(logger, cfg)
 	if err != nil {
@@ -411,8 +411,8 @@ func TestConfigValidation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			os.Setenv("VOLTA_MASTER_PASSPHRASE", "test-passphrase")
-			defer os.Unsetenv("VOLTA_MASTER_PASSPHRASE")
+			_ = os.Setenv("VOLTA_MASTER_PASSPHRASE", "test-passphrase")
+			defer func() { _ = os.Unsetenv("VOLTA_MASTER_PASSPHRASE") }()
 
 			cfg := &appconfig.Config{
 				VoltaS3Bucket: tt.bucketName,
@@ -434,10 +434,10 @@ func TestNewManager_WithKeyPrefix(t *testing.T) {
 		VoltaStorage:  appconfig.VoltaStorageS3,
 	}
 
-	os.Setenv("VOLTA_MASTER_PASSPHRASE", "test-passphrase")
-	os.Setenv("AWS_REGION", "us-east-1")
-	defer os.Unsetenv("VOLTA_MASTER_PASSPHRASE")
-	defer os.Unsetenv("AWS_REGION")
+	_ = os.Setenv("VOLTA_MASTER_PASSPHRASE", "test-passphrase")
+	_ = os.Setenv("AWS_REGION", "us-east-1")
+	defer func() { _ = os.Unsetenv("VOLTA_MASTER_PASSPHRASE") }()
+	defer func() { _ = os.Unsetenv("AWS_REGION") }()
 
 	manager, err := NewManager(logger, cfg)
 	if err != nil {
@@ -456,12 +456,12 @@ func TestNewManager_WithAccessKey(t *testing.T) {
 		VoltaStorage:  appconfig.VoltaStorageS3,
 	}
 
-	os.Setenv("VOLTA_MASTER_PASSPHRASE", "test-passphrase")
-	os.Setenv("AWS_ACCESS_KEY_ID", "test-key")
-	os.Setenv("AWS_SECRET_ACCESS_KEY", "test-secret")
-	defer os.Unsetenv("VOLTA_MASTER_PASSPHRASE")
-	defer os.Unsetenv("AWS_ACCESS_KEY_ID")
-	defer os.Unsetenv("AWS_SECRET_ACCESS_KEY")
+	_ = os.Setenv("VOLTA_MASTER_PASSPHRASE", "test-passphrase")
+	_ = os.Setenv("AWS_ACCESS_KEY_ID", "test-key")
+	_ = os.Setenv("AWS_SECRET_ACCESS_KEY", "test-secret")
+	defer func() { _ = os.Unsetenv("VOLTA_MASTER_PASSPHRASE") }()
+	defer func() { _ = os.Unsetenv("AWS_ACCESS_KEY_ID") }()
+	defer func() { _ = os.Unsetenv("AWS_SECRET_ACCESS_KEY") }()
 
 	manager, err := NewManager(logger, cfg)
 	if err != nil {
@@ -485,8 +485,8 @@ func TestManager_Init_MultipleTenants(t *testing.T) {
 		secretValue: "my-master-passphrase",
 	}
 
-	os.Setenv("VOLTA_MASTER_PASSPHRASE", "test-passphrase")
-	defer os.Unsetenv("VOLTA_MASTER_PASSPHRASE")
+	_ = os.Setenv("VOLTA_MASTER_PASSPHRASE", "test-passphrase")
+	defer func() { _ = os.Unsetenv("VOLTA_MASTER_PASSPHRASE") }()
 
 	manager := &Manager{
 		logger:              logger,
@@ -515,8 +515,8 @@ func TestManager_CloseAll_MultipleTimes(t *testing.T) {
 		VoltaS3Bucket: "test-bucket",
 	}
 
-	os.Setenv("VOLTA_MASTER_PASSPHRASE", "test-passphrase")
-	defer os.Unsetenv("VOLTA_MASTER_PASSPHRASE")
+	_ = os.Setenv("VOLTA_MASTER_PASSPHRASE", "test-passphrase")
+	defer func() { _ = os.Unsetenv("VOLTA_MASTER_PASSPHRASE") }()
 
 	manager := &Manager{
 		logger:              logger,

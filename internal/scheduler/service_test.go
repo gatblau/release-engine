@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -59,23 +60,39 @@ func TestSchedulerService_Stop(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestSchedulerService_claimAndDispatch(t *testing.T) {
-	pool := new(db.MockPool)
-	reg := new(mockModuleRegistry)
-	lm := new(mockLeaseManager)
-	conn := new(db.MockConn)
+// Note: claimAndDispatch tests require proper pgx.Rows mocking which is complex.
+// The function is tested via integration tests (it_test.go).
+// Below we test the error types which are simpler to test.
 
-	_ = &schedulerService{
-		pool:           pool,
-		moduleRegistry: reg,
-		leaseManager:   lm,
+// Test scheduler error types
+func TestSchedulerError(t *testing.T) {
+	// Create a scheduler error
+	innerErr := fmt.Errorf("inner error")
+	err := &SchedulerError{
+		Err:    innerErr,
+		Code:   "TEST_CODE",
+		Detail: map[string]string{"key": "value"},
 	}
 
-	ctx := context.Background()
+	// Test Error() method - should contain the code and error message
+	assert.Contains(t, err.Error(), "TEST_CODE")
+	assert.Contains(t, err.Error(), "inner error")
 
-	pool.On("Acquire", ctx).Return(conn, nil)
-	conn.On("Query", ctx, mock.Anything, mock.Anything).Return(nil, nil)
-	conn.On("Release").Return()
+	// Test Unwrap() method
+	assert.Equal(t, innerErr, err.Unwrap())
+}
 
-	// Tested by calling directly if needed or via integration tests
+func TestSchedulerError_WithWrappedError(t *testing.T) {
+	// Create a wrapped error
+	wrappedErr := fmt.Errorf("wrapped: %w", assert.AnError)
+	err := &SchedulerError{
+		Err:  wrappedErr,
+		Code: "WRAPPED_CODE",
+	}
+
+	// Test Error() method - should contain the code
+	assert.Contains(t, err.Error(), "WRAPPED_CODE")
+
+	// Test Unwrap() method - should return the wrapped error
+	assert.Equal(t, wrappedErr, err.Unwrap())
 }
