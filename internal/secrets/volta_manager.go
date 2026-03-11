@@ -2,7 +2,6 @@ package secrets
 
 import (
 	"context"
-	"crypto/rand"
 	"fmt"
 	"os"
 	"sync"
@@ -10,8 +9,7 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 	appconfig "github.com/gatblau/release-engine/internal/config"
-	"github.com/gatblau/volta"
-	"github.com/gatblau/volta/persist"
+	volta "github.com/gatblau/volta/pkg"
 	"go.uber.org/zap"
 )
 
@@ -22,14 +20,14 @@ type SecretsManagerClient interface {
 
 // VaultManagerFactory creates VaultManagerService instances
 type VaultManagerFactory interface {
-	Create(options volta.Options, s3Config persist.S3Config, auditLogger interface{}) (volta.VaultManagerService, error)
+	Create(options volta.Options, s3Config volta.S3Config, auditLogger interface{}) (volta.VaultManagerService, error)
 	CreateFileStore(options volta.Options, basePath string, auditLogger interface{}) volta.VaultManagerService
 }
 
 // defaultVaultManagerFactory creates real vault manager instances
 type defaultVaultManagerFactory struct{}
 
-func (f *defaultVaultManagerFactory) Create(options volta.Options, s3Config persist.S3Config, auditLogger interface{}) (volta.VaultManagerService, error) {
+func (f *defaultVaultManagerFactory) Create(options volta.Options, s3Config volta.S3Config, auditLogger interface{}) (volta.VaultManagerService, error) {
 	return volta.NewVaultManagerS3Store(options, s3Config, nil)
 }
 
@@ -104,12 +102,14 @@ func NewManagerWithDeps(logger *zap.Logger, cfg *appconfig.Config, factory Vault
 		// Production mode: use S3 storage with automatic salt persistence
 		// Salt is NOT provided - volta will handle persistence automatically
 		options := buildVoltaOptions(cfg, false)
-		s3Config := persist.S3Config{
-			Bucket:    cfg.VoltaS3Bucket,
-			Region:    os.Getenv("AWS_REGION"),
-			Endpoint:  os.Getenv("AWS_ENDPOINT"),
-			UseSSL:    os.Getenv("AWS_USE_SSL") == "true",
-			KeyPrefix: "volta/",
+		s3Config := volta.S3Config{
+			AccessKeyID:     os.Getenv("AWS_ACCESS_KEY_ID"),
+			SecretAccessKey: os.Getenv("AWS_SECRET_ACCESS_KEY"),
+			Bucket:          cfg.VoltaS3Bucket,
+			Region:          os.Getenv("AWS_REGION"),
+			Endpoint:        os.Getenv("AWS_ENDPOINT"),
+			UseSSL:          os.Getenv("AWS_USE_SSL") == "true",
+			KeyPrefix:       "volta/",
 		}
 		vm, err = factory.Create(options, s3Config, nil)
 		if err != nil {
@@ -134,8 +134,7 @@ func NewManagerWithDeps(logger *zap.Logger, cfg *appconfig.Config, factory Vault
 func buildVoltaOptions(cfg *appconfig.Config, includeSalt bool) volta.Options {
 	passphraseEnvVar := cfg.VoltaPassphraseEnvVar
 	if passphraseEnvVar == "" {
-		//nolint:gosec // G101: This is a configuration key (env var name), not an actual secret value
-		passphraseEnvVar = "VOLTA_MASTER_PASSPHRASE"
+		passphraseEnvVar = "VOLTA_MASTER_PASSPHRASE" // #nosec G101 - This is a configuration key (env var name), not an actual secret value
 	}
 
 	options := volta.Options{
@@ -143,20 +142,16 @@ func buildVoltaOptions(cfg *appconfig.Config, includeSalt bool) volta.Options {
 		EnableMemoryLock: true,
 	}
 
-	// In development mode, allow optional salt from environment for stability
+	// If VOLTA_SALT env var is set, use it (useful for pinning a known salt in dev/CI).
+	// Otherwise, leave DerivationSalt empty — Volta will auto-generate and persist the salt
+	// to the store on first use, exactly as it does for S3 mode. This prevents a mismatch
+	// between the randomly-generated in-memory salt and any salt already persisted on disk.
 	if includeSalt {
 		if saltStr := os.Getenv("VOLTA_SALT"); saltStr != "" {
 			options.DerivationSalt = []byte(saltStr)
-		} else {
-			// Generate a random salt for dev if not provided
-			// Note: This is acceptable for dev only; data will not persist across restarts
-			salt := make([]byte, 32)
-			if _, err := rand.Read(salt); err == nil {
-				options.DerivationSalt = salt
-			}
 		}
 	}
-	// In production mode, DerivationSalt is NOT set - volta handles persistence automatically
+	// In production (S3) mode, DerivationSalt is NOT set - volta handles persistence automatically
 
 	return options
 }
@@ -167,8 +162,7 @@ func (m *Manager) Init(ctx context.Context) error {
 	// Use the configured env var name, or fall back to default if not set
 	passphraseEnvVar := m.cfg.VoltaPassphraseEnvVar
 	if passphraseEnvVar == "" {
-		//nolint:gosec // G101: This is a configuration key (env var name), not an actual secret value
-		passphraseEnvVar = "VOLTA_MASTER_PASSPHRASE"
+		passphraseEnvVar = "VOLTA_MASTER_PASSPHRASE" // #nosec G101 - This is a configuration key (env var name), not an actual secret value
 	}
 
 	// Check if passphrase is provided via environment variable (preferred for production)

@@ -113,10 +113,9 @@ func (l *loader) Load(ctx context.Context) (Config, error) {
 	voltaFilePath := os.Getenv("VOLTA_FILE_PATH")
 
 	// Load optional Volta passphrase environment variable name
-	// nolint:gosec // G101: This is a configuration key (env var name), not an actual secret value
 	voltaPassphraseEnvVar := os.Getenv("VOLTA_PASSPHRASE_ENV_VAR")
 	if voltaPassphraseEnvVar == "" {
-		voltaPassphraseEnvVar = "VOLTA_MASTER_PASSPHRASE" //nolint:gosec // G101: This is a configuration key (env var name), not an actual secret value
+		voltaPassphraseEnvVar = "VOLTA_MASTER_PASSPHRASE" // #nosec G101 - This is a configuration key (env var name), not an actual secret value
 	}
 
 	return Config{

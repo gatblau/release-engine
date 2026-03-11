@@ -8,8 +8,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 	appconfig "github.com/gatblau/release-engine/internal/config"
-	"github.com/gatblau/volta"
-	"github.com/gatblau/volta/persist"
+	volta "github.com/gatblau/volta/pkg"
 	"go.uber.org/zap"
 )
 
@@ -19,7 +18,7 @@ type mockVaultManagerFactory struct {
 	err error
 }
 
-func (f *mockVaultManagerFactory) Create(options volta.Options, s3Config persist.S3Config, auditLogger interface{}) (volta.VaultManagerService, error) {
+func (f *mockVaultManagerFactory) Create(options volta.Options, s3Config volta.S3Config, auditLogger interface{}) (volta.VaultManagerService, error) {
 	return f.vm, f.err
 }
 
