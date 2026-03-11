@@ -13,6 +13,28 @@ func TestNewOutboxDispatcher(t *testing.T) {
 	mockPool := new(db.MockPool)
 	dispatcher := NewOutboxDispatcher(mockPool)
 	assert.NotNil(t, dispatcher)
+
+	eventTypes := dispatcher.RegisteredEventTypes()
+	assert.Contains(t, eventTypes, EventApprovalRequested)
+	assert.Contains(t, eventTypes, EventApprovalDecided)
+	assert.Contains(t, eventTypes, EventApprovalEscalated)
+	assert.Contains(t, eventTypes, EventApprovalExpired)
+}
+
+func TestOutboxDispatcher_Emit_RegisteredType(t *testing.T) {
+	mockPool := new(db.MockPool)
+	dispatcher := NewOutboxDispatcher(mockPool)
+
+	err := dispatcher.Emit(context.Background(), Event{Type: EventApprovalDecided, JobID: "job-1", StepID: "step-1", OccurredAt: time.Now().UTC()})
+	assert.NoError(t, err)
+}
+
+func TestOutboxDispatcher_Emit_UnregisteredType(t *testing.T) {
+	mockPool := new(db.MockPool)
+	dispatcher := NewOutboxDispatcher(mockPool)
+
+	err := dispatcher.Emit(context.Background(), Event{Type: "unknown-event", JobID: "job-1", StepID: "step-1", OccurredAt: time.Now().UTC()})
+	assert.Error(t, err)
 }
 
 func TestOutboxDispatcher_Start(t *testing.T) {

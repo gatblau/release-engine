@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"context"
 	"testing"
 )
 
@@ -11,6 +12,9 @@ type mockModule struct {
 
 func (m *mockModule) Key() string     { return m.key }
 func (m *mockModule) Version() string { return m.version }
+func (m *mockModule) Execute(ctx context.Context, api any, params map[string]any) error {
+	return nil
+}
 
 func TestModuleRegistry(t *testing.T) {
 	reg := NewModuleRegistry()

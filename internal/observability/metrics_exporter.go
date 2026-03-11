@@ -19,13 +19,19 @@ type Exporter interface {
 
 // MetricsExporter implements the Exporter interface for Prometheus metrics.
 type MetricsExporter struct {
-	registry       *prometheus.Registry
-	logger         *zap.Logger
-	collectors     map[string]prometheus.Collector
-	mu             sync.RWMutex
-	httpPort       int
-	scrapeDuration *prometheus.HistogramVec
-	totalRequests  *prometheus.CounterVec
+	registry                   *prometheus.Registry
+	logger                     *zap.Logger
+	collectors                 map[string]prometheus.Collector
+	mu                         sync.RWMutex
+	httpPort                   int
+	scrapeDuration             *prometheus.HistogramVec
+	totalRequests              *prometheus.CounterVec
+	approvalRequestsTotal      *prometheus.CounterVec
+	approvalDecisionsTotal     *prometheus.CounterVec
+	approvalLatencySeconds     *prometheus.HistogramVec
+	approvalEscalationsTotal   *prometheus.CounterVec
+	approvalTimeoutsTotal      *prometheus.CounterVec
+	approvalWorkerTickDuration *prometheus.HistogramVec
 }
 
 // NewMetricsExporter creates a new MetricsExporter.
@@ -203,6 +209,75 @@ func (m *MetricsExporter) RegisterCollectors() error {
 		return err
 	}
 
+	// Register approval lifecycle metrics (Phase 8)
+	m.approvalRequestsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "re_approval_requests_total",
+			Help: "Total number of approval requests created",
+		},
+		[]string{"tenant_id", "path_key", "step_key"},
+	)
+	if err := m.registerCollector("approval_requests_total", m.approvalRequestsTotal); err != nil {
+		return err
+	}
+
+	m.approvalDecisionsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "re_approval_decisions_total",
+			Help: "Total number of approval decisions recorded",
+		},
+		[]string{"tenant_id", "path_key", "step_key", "decision"},
+	)
+	if err := m.registerCollector("approval_decisions_total", m.approvalDecisionsTotal); err != nil {
+		return err
+	}
+
+	m.approvalLatencySeconds = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "re_approval_latency_seconds",
+			Help:    "Approval decision latency in seconds",
+			Buckets: []float64{1, 5, 10, 30, 60, 120, 300, 600, 1800, 3600},
+		},
+		[]string{"tenant_id", "path_key"},
+	)
+	if err := m.registerCollector("approval_latency_seconds", m.approvalLatencySeconds); err != nil {
+		return err
+	}
+
+	m.approvalEscalationsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "re_approval_escalations_total",
+			Help: "Total number of approval escalations",
+		},
+		[]string{"tenant_id", "path_key"},
+	)
+	if err := m.registerCollector("approval_escalations_total", m.approvalEscalationsTotal); err != nil {
+		return err
+	}
+
+	m.approvalTimeoutsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "re_approval_timeouts_total",
+			Help: "Total number of approval timeouts",
+		},
+		[]string{"tenant_id", "path_key"},
+	)
+	if err := m.registerCollector("approval_timeouts_total", m.approvalTimeoutsTotal); err != nil {
+		return err
+	}
+
+	m.approvalWorkerTickDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "re_approval_worker_tick_duration_seconds",
+			Help:    "Duration of approval worker tick execution",
+			Buckets: []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0},
+		},
+		[]string{"status"},
+	)
+	if err := m.registerCollector("approval_worker_tick_duration_seconds", m.approvalWorkerTickDuration); err != nil {
+		return err
+	}
+
 	m.logger.Info("metricsexporter.start", zap.String("component", "MetricsExporter"))
 	m.logger.Info("metricsexporter.success", zap.String("component", "MetricsExporter"))
 
@@ -273,4 +348,52 @@ func (m *MetricsExporter) GetRegistry() *prometheus.Registry {
 func (m *MetricsExporter) RecordScrape(ctx context.Context, status string, duration time.Duration) {
 	m.scrapeDuration.WithLabelValues(status).Observe(duration.Seconds())
 	m.totalRequests.WithLabelValues(status).Inc()
+}
+
+// RecordApprovalRequest increments approval request count.
+func (m *MetricsExporter) RecordApprovalRequest(tenantID, pathKey, stepKey string) {
+	if m.approvalRequestsTotal == nil {
+		return
+	}
+	m.approvalRequestsTotal.WithLabelValues(tenantID, pathKey, stepKey).Inc()
+}
+
+// RecordApprovalDecision increments approval decision count.
+func (m *MetricsExporter) RecordApprovalDecision(tenantID, pathKey, stepKey, decision string) {
+	if m.approvalDecisionsTotal == nil {
+		return
+	}
+	m.approvalDecisionsTotal.WithLabelValues(tenantID, pathKey, stepKey, decision).Inc()
+}
+
+// RecordApprovalLatency observes approval decision latency.
+func (m *MetricsExporter) RecordApprovalLatency(tenantID, pathKey string, latency time.Duration) {
+	if m.approvalLatencySeconds == nil {
+		return
+	}
+	m.approvalLatencySeconds.WithLabelValues(tenantID, pathKey).Observe(latency.Seconds())
+}
+
+// RecordApprovalEscalation increments approval escalation count.
+func (m *MetricsExporter) RecordApprovalEscalation(tenantID, pathKey string) {
+	if m.approvalEscalationsTotal == nil {
+		return
+	}
+	m.approvalEscalationsTotal.WithLabelValues(tenantID, pathKey).Inc()
+}
+
+// RecordApprovalTimeout increments approval timeout count.
+func (m *MetricsExporter) RecordApprovalTimeout(tenantID, pathKey string) {
+	if m.approvalTimeoutsTotal == nil {
+		return
+	}
+	m.approvalTimeoutsTotal.WithLabelValues(tenantID, pathKey).Inc()
+}
+
+// RecordApprovalWorkerTick records approval worker tick duration.
+func (m *MetricsExporter) RecordApprovalWorkerTick(status string, duration time.Duration) {
+	if m.approvalWorkerTickDuration == nil {
+		return
+	}
+	m.approvalWorkerTickDuration.WithLabelValues(status).Observe(duration.Seconds())
 }

@@ -30,6 +30,7 @@
 | A-18 | CI/CD | Delivery pipeline uses GitHub Actions for build/test and ArgoCD for runtime rollout and rollback decisions. | ArgoCD rollout behavior is explicit; CI tool not explicitly named, so GitHub Actions is a project constant assumption. | Automation scripts and release gates must be redesigned. |
 | A-19 | Region & Compliance | Primary production footprint is EU region(s), with retention and erasure controls enforced per compliance requirements. | Explicit EU compliance section. | Legal/compliance controls and data residency guarantees change. |
 | A-20 | Alert Routing | PagerDuty + Slack are available and configured for SLO/canary alerts. | Explicit canary rollback notification path in design. | Automated rollback may lack human escalation and response SLAs. |
+| A-21 | Human-in-the-Loop | Approval gates implemented as a native engine feature using `approval_decisions` table and `steps` table extension. | Explicitly architected for native gate support, eliminating external dependency. | Decision tracking and audit trails for approvals would require external system delegation. |
 
 ## 1B — Open Questions
 

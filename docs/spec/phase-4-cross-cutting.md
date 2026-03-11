@@ -71,6 +71,29 @@ Policy is applied across all relevant components through middleware, service wra
 2. Enforce deterministic action (allow, deny, retry, or terminate).
 3. Persist required state transitions and audit evidence.
 4. Emit logs, metrics, and traces with standard fields.
+5. Approval lifecycle metrics MUST be emitted at runtime hooks:
+   - request created (`re_approval_requests_total`)
+   - decision recorded (`re_approval_decisions_total`)
+   - decision latency observed (`re_approval_latency_seconds`)
+   - escalation (`re_approval_escalations_total`)
+   - timeout (`re_approval_timeouts_total`)
+   - worker poll duration (`re_approval_worker_tick_duration_seconds`)
+
+Approval-decision guardrails are enforced for `POST /v1/jobs/{job_id}/steps/{step_id}/decisions`:
+
+- Role allow-list (`allowed_roles`) is matched case-insensitively.
+- Self-approval is denied when `self_approval=false` and `approver == job_owner`.
+- Tenant scope is denied when `approver_tenant_id != job_tenant_id`.
+- Optional budget authority is denied when `estimated_cost > approver_limit`.
+- Four-eyes progression is enforced after authorisation: the step remains `waiting_approval` until `approved_count >= min_approvers`.
+- Approval wait TTL is mandatory and resolved as step override → path policy default → system default (`48h`).
+- At `escalation_at * ttl` (default 80%), emit `approval_escalated` without changing step state.
+- At expiry (`now() >= approval_expires_at`), transition step to `error` with `approval_timeout`, record system decision `expired`, and emit `approval_expired`.
+- Outbox emission contract for approval lifecycle events:
+  - Allowed types: `approval_requested`, `approval_decided`, `approval_escalated`, `approval_expired`.
+  - Event type must be registered in `OutboxDispatcher` before enqueue.
+  - Unregistered event types are rejected and not persisted.
+  - Event payloads are immutable once accepted.
 
 ---
 
@@ -521,6 +544,14 @@ Feature: Metrics
 - **Log events:** `crosscut.metrics.applied`, `crosscut.metrics.rejected`
 - **Metrics:** `crosscut_metrics_total{status}`
 - **Trace span:** `crosscut.metrics`
+
+Approval-specific metrics contract:
+- `re_approval_requests_total{tenant_id,path_key,step_key}`
+- `re_approval_decisions_total{tenant_id,path_key,step_key,decision}`
+- `re_approval_latency_seconds{tenant_id,path_key}`
+- `re_approval_escalations_total{tenant_id,path_key}`
+- `re_approval_timeouts_total{tenant_id,path_key}`
+- `re_approval_worker_tick_duration_seconds{status}`
 
 ---
 

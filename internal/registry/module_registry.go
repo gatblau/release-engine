@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"context"
 	"fmt"
 	"sync"
 )
@@ -9,6 +10,7 @@ import (
 type Module interface {
 	Key() string
 	Version() string
+	Execute(ctx context.Context, api any, params map[string]any) error
 }
 
 // ModuleRegistry handles module registration and lookup.

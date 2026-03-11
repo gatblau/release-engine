@@ -33,10 +33,10 @@
 
 6. [ ] Implement **AuthMiddleware** and JWT validation pipeline.
 7. [ ] Implement **RateLimiter** (token bucket per tenant).
-8. [ ] Implement **PolicyEngine** (Go-native evaluator, cache bypass for `job:cancel`).
+8. [ ] Implement **PolicyEngine** (Go-native evaluator, cache bypass for `job:cancel`, and `EvaluateApproval` guardrails for role, self-approval, tenant scope, and optional budget authority).
 9. [ ] Implement **IdempotencyService** with deterministic intake transaction.
 10. [ ] Implement **HealthHandler** (`/healthz`, `/readyz`).
-11. [ ] Implement **JobsAPIHandler** routes: `POST /v1/jobs`, `GET /v1/jobs/{id}`, `POST /v1/jobs/{id}/cancel`.
+11. [ ] Implement **JobsAPIHandler** routes: `POST /v1/jobs`, `GET /v1/jobs/{id}`, `POST /v1/jobs/{id}/cancel`, `POST /v1/jobs/{job_id}/steps/{step_id}/decisions`, `GET /v1/jobs/{job_id}/steps/{step_id}/approval-context`, and pending-approval query via `GET /v1/jobs?step_status=waiting_approval`.
 
 ## 3. Runtime Execution Plane (Phase 1–2)
 
@@ -74,3 +74,51 @@
 - [ ] Verify dashboards and alerts for claim latency, fenced conflicts, outbox DLQ, and effect DLQ.
 - [ ] Run security and vulnerability checks: `gosec ./...` and `govulncheck ./...`.
 - [ ] Run linter: `golangci-lint run ./...`.
+
+## 7. Approval Lifecycle (Phase 6)
+
+25. [ ] Implement **ApprovalWorker** lifecycle loop (`internal/transport/http/approval_worker.go`).
+        Verify: worker ticks every 30 seconds by default and can be configured.
+
+26. [ ] Implement TTL persistence in **StepAPIAdapter.WaitForApproval** using `approval_ttl` and `approval_expires_at`.
+        Verify: step records include TTL and computed expiry timestamp.
+
+27. [ ] Implement escalation and expiry transitions in **ApprovalService** / worker integration.
+        Verify: emit `approval_escalated` at threshold and `approval_expired` at timeout with `approval_timeout` reason.
+
+28. [ ] Add expiry decision recording.
+        Verify: system decision (`decision=expired`, `approver=system`) is inserted exactly once per expired step.
+
+29. [ ] Add and run tests for escalation timing and expiry handling.
+        Verify: tests cover pre-threshold, threshold crossing, and post-expiry transitions.
+
+## 8. Outbox Events (Phase 7)
+
+30. [ ] Register approval event types in **OutboxDispatcher**.
+        Verify: dispatcher registers `approval_requested`, `approval_decided`, `approval_escalated`, `approval_expired` at startup.
+
+31. [ ] Enforce dispatcher event-type contract.
+        Verify: unregistered event types are rejected and not queued.
+
+32. [ ] Emit approval lifecycle outbox events from **ApprovalService**.
+        Verify: `approval_requested` on wait entry and `approval_decided` on accepted decision.
+
+33. [ ] Emit timeout/escalation events from **ApprovalWorker** integration.
+        Verify: `approval_escalated` and `approval_expired` are emitted with required payload fields.
+
+34. [ ] Add and run outbox emission tests.
+        Verify: coverage includes event registration, accepted emissions, and rejection of unknown event types.
+
+## 9. Metrics and Observability (Phase 8)
+
+35. [ ] Register approval lifecycle metrics in **MetricsExporter**.
+        Verify: exporter registers `re_approval_requests_total`, `re_approval_decisions_total`, `re_approval_latency_seconds`, `re_approval_escalations_total`, `re_approval_timeouts_total`, and `re_approval_worker_tick_duration_seconds`.
+
+36. [ ] Instrument **ApprovalService** with approval telemetry hooks.
+        Verify: request, decision, latency, escalation, and timeout metrics are emitted at lifecycle transition points.
+
+37. [ ] Instrument **ApprovalWorker** tick loop with duration telemetry.
+        Verify: each worker tick records `re_approval_worker_tick_duration_seconds{status}`.
+
+38. [ ] Add and run observability-focused tests for approval metrics.
+        Verify: unit tests cover collector registration and metric emission from service/worker paths.

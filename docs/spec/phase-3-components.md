@@ -16,6 +16,7 @@
 - [SPEC: LeaseManager](#spec-leasemanager)
 - [SPEC: RunnerService](#spec-runnerservice)
 - [SPEC: StepAPIAdapter](#spec-stepapiadapter)
+- [SPEC: ApprovalWorker](#spec-approvalworker)
 - [SPEC: ModuleRegistry](#spec-moduleregistry)
 - [SPEC: ConnectorRegistry](#spec-connectorregistry)
 - [SPEC: VoltaManager](#spec-voltamanager)
@@ -1132,6 +1133,7 @@ Validation rules used by this component:
 ```go
 type Evaluator interface {
     Evaluate(ctx context.Context, input PolicyInput) (PolicyDecision, error)
+    EvaluateApproval(input ApprovalPolicyInput) ApprovalPolicyResult
     Reload(ctx context.Context) error
 }
 ```
@@ -1171,7 +1173,15 @@ type Evaluator interface {
 1. Build PolicyInput from claims, action, tenant, and resource path.
 2. Evaluate policy rules in-memory with cached bindings.
 3. Bypass cache for destructive action `job:cancel`.
-4. Write audit event for allow/deny decision.
+4. For approval decisions, evaluate `ApprovalPolicyInput` with guardrails:
+   - self-approval block when policy sets `self_approval=false`
+   - role allow-list match against `allowed_roles`
+   - tenant scope match (`approver_tenant_id == job_tenant_id`)
+   - optional budget authority check (`estimated_cost <= approver_limit` when both metadata values are present)
+   - role matching is case-insensitive.
+5. `EvaluateApproval()` returns a pure authorisation decision for one submitted decision; it does not apply four-eyes progression transitions.
+6. Four-eyes progression (`approved_count >= min_approvers`) is enforced by `ApprovalService` after successful decision persistence.
+7. Write audit event for allow/deny decision.
 
 ---
 
@@ -1186,6 +1196,7 @@ This component uses shared Release Engine tables and does not introduce a new ta
 | Condition | HTTP Status | Error Code | Response Body |
 |---|---|---|---|
 | Policy denied | 403 | `ERR_POLICY_DENIED` | `{"error":"policy denied","code":"ERR_POLICY_DENIED","details":null}` |
+| Approval policy violation | 422 | `POLICY_VIOLATION` | `{"error":"policy violation","code":"POLICY_VIOLATION","details":null}` |
 | Policy evaluation error | 503 | `POLICY_EVAL_FAILED` | `{"error":"policy evaluation failed","code":"POLICY_EVAL_FAILED","details":null}` |
 
 ---
@@ -1478,8 +1489,11 @@ Validation rules used by this component:
 
 ```go
 POST   /v1/jobs
+GET    /v1/jobs
 GET    /v1/jobs/:job_id
 POST   /v1/jobs/:job_id/cancel
+POST   /v1/jobs/:job_id/steps/:step_id/decisions
+GET    /v1/jobs/:job_id/steps/:step_id/approval-context
 ```
 
 ##### Example — JobsAPIHandler
@@ -1518,6 +1532,12 @@ POST   /v1/jobs/:job_id/cancel
 2. Validate callback URL against SSRF and allowlist rules.
 3. Authorise action using PolicyEngine (`job:create`, `job:read`, `job:cancel`).
 4. Delegate intake to IdempotencyService and return stable headers (`Idempotency-Key`, `Idempotency-Replayed`, `Location`).
+5. Accept decision submissions for `waiting_approval` steps with idempotency support.
+6. Expose pending approval job queries and step approval context read API.
+7. Enforce decision outcomes:
+   - `rejected` transitions step state to `error` immediately.
+   - `approved` keeps step in `waiting_approval` until policy threshold is met.
+   - transition to `running` only when `approved_count >= min_approvers`.
 
 ---
 
@@ -1533,6 +1553,9 @@ This component uses shared Release Engine tables and does not introduce a new ta
 |---|---|---|---|
 | Invalid callback URL | 400 | `ERR_INVALID_CALLBACK_URL` | `{"error":"invalid callback URL","code":"ERR_INVALID_CALLBACK_URL","details":null}` |
 | Payload too large | 413 | `ERR_PAYLOAD_TOO_LARGE` | `{"error":"payload too large","code":"ERR_PAYLOAD_TOO_LARGE","details":null}` |
+| Step not waiting approval / decision conflict | 409 | `CONFLICT` | `{"error":"step is not waiting approval","code":"CONFLICT","details":null}` |
+| Approver role forbidden | 403 | `FORBIDDEN` | `{"error":"approver not authorised","code":"FORBIDDEN","details":null}` |
+| Approval policy violation (self-approval) | 422 | `POLICY_VIOLATION` | `{"error":"policy violation","code":"POLICY_VIOLATION","details":null}` |
 
 ---
 
@@ -1863,6 +1886,7 @@ type Scheduler interface {
 2. Claim up to SCHEDULER_CLAIM_BATCH_SIZE jobs using atomic SQL with run_id fencing.
 3. Apply DWRR fairness by tenant weights and starvation window 10 seconds.
 4. Dispatch claimed jobs to runner queue with lease metadata.
+5. Do not claim steps blocked by unresolved approval gates (`waiting_approval`).
 
 ---
 
@@ -2205,10 +2229,10 @@ type Runner interface {
 
 #### Internal Logic (step-by-step)
 
-1. Resolve module binding from path and version.
-2. Execute module steps through StepAPIAdapter only.
-3. For external effects, reserve effect, acquire effect lease, call connector with call_id, and finalise status.
-4. Finalise job state with run_id fence; 0-row update stops processing immediately.
+1. Load `path_key`, `version`, and `params_json` for `(job_id, run_id)`.
+2. Resolve module binding from path and version in `ModuleRegistry`.
+3. Decode `params_json` to `map[string]any` and invoke `module.Execute(ctx, stepAPI, params)`.
+4. Module execution drives step lifecycle through `StepAPI`, including approval gating via `WaitForApproval`.
 
 ---
 
@@ -2346,6 +2370,7 @@ type StepAPI interface {
     EndStepOK(stepKey string, output map[string]any) error
     EndStepErr(stepKey, code, msg string) error
     CallConnector(ctx context.Context, req ConnectorRequest) (*ConnectorResult, error)
+    WaitForApproval(ctx context.Context, req ApprovalRequest) (ApprovalOutcome, error)
     SetContext(key string, value any) error
     GetContext(key string) (any, bool)
     IsCancelled() bool
@@ -2384,10 +2409,10 @@ type StepAPI interface {
 
 #### Internal Logic (step-by-step)
 
-1. BeginStep checks previous successful step rows for resume behaviour.
-2. Persist step outcomes in `steps` table.
-3. Reserve effects in `external_effects` with stable call_id.
-4. Store and read job context in `job_context` with run_id fencing.
+1. BeginStep tracks the active step key for subsequent API calls.
+2. EndStepOK/EndStepErr persist terminal step state in `steps` via upsert semantics.
+3. WaitForApproval persists `approval_request`, computes and stores `approval_ttl` and `approval_expires_at`, transitions step to `waiting_approval`, and polls `approval_decisions` until a decision is available.
+4. SetContext/GetContext provide in-memory context storage for module execution scope.
 
 ---
 
@@ -2463,6 +2488,116 @@ Feature: StepAPIAdapter
 | This → TracingService | outbound call | OpenTelemetry | span start/end, attributes, errors |
 | Upstream runtime → This | inbound call | in-process call | context, tenant_id, job_id, run_id |
 
+### SPEC: ApprovalWorker
+
+**File:** `internal/transport/http/approval_worker.go`
+**Package:** `http`
+**Phase:** 2
+**Dependencies:** PolicyEngine, JobsAPIHandler, OutboxDispatcher
+
+---
+
+#### Purpose
+
+Applies approval timeout lifecycle rules for `waiting_approval` steps, including escalation and automatic expiry.
+
+---
+
+#### Public Interface
+
+```go
+type ApprovalWorker struct {
+    // Tick applies escalation and expiry decisions once.
+    Tick(ctx context.Context)
+    // Run executes Tick on a fixed poll interval.
+    Run(ctx context.Context)
+}
+```
+
+---
+
+#### Internal Logic (step-by-step)
+
+1. Poll every 30 seconds by default.
+2. Identify approval steps in `waiting_approval` with computed `approval_expires_at`.
+3. Emit `approval_escalated` once when elapsed time reaches `escalation_at * ttl`.
+4. Transition expired steps to `error` with `approval_timeout` reason.
+5. Record system decision (`expired`, approver=`system`) and emit `approval_expired`.
+6. Emit outbox contracts through registered event types only (`approval_escalated`, `approval_expired`).
+
+---
+
+#### Data Model (if this component owns a table)
+
+This component uses shared Release Engine tables and does not introduce a new table in this phase.
+
+---
+
+#### Error Table
+
+| Condition | HTTP Status | Error Code | Response Body |
+|---|---|---|---|
+| Approval timeout transition failed | 503 | `APPROVAL_TIMEOUT_WRITE_FAILED` | `{"error":"failed to persist approval timeout","code":"APPROVAL_TIMEOUT_WRITE_FAILED","details":null}` |
+| Escalation event emission failed | 503 | `APPROVAL_ESCALATION_EMIT_FAILED` | `{"error":"failed to emit escalation","code":"APPROVAL_ESCALATION_EMIT_FAILED","details":null}` |
+
+---
+
+#### Acceptance Criteria (Gherkin)
+
+```gherkin
+Feature: ApprovalWorker
+
+  Scenario: Happy path
+    Given waiting approvals below expiry with elapsed time crossing escalation threshold
+    When the worker ticks
+    Then it emits a single escalation event and leaves step state unchanged
+
+  Scenario: Edge case
+    Given an already escalated waiting approval
+    When the worker ticks again before expiry
+    Then it does not emit duplicate escalation events
+
+  Scenario: Error
+    Given a waiting approval past expiry
+    When the worker ticks
+    Then it records an expired system decision and transitions the step to error
+```
+
+---
+
+#### Performance Targets
+
+| Metric | Target |
+|---|---|
+| Tick execution p95 | <50ms for 1,000 waiting approvals |
+| Escalation/expiry detection lag | <= poll interval + 5s |
+
+---
+
+#### Security Considerations
+
+- Enforce tenant isolation on all queried steps.
+- Use database time for TTL comparisons to avoid host clock skew.
+- Ensure system-generated expiry decisions are immutable and auditable.
+
+---
+
+#### Observability
+
+- **Log events:** `approvalworker.tick`, `approvalworker.escalated`, `approvalworker.expired`
+- **Metrics:** `release_engine_approval_escalations_total`, `release_engine_approval_timeouts_total`
+- **Trace span:** `approval.worker.tick`
+
+---
+
+#### Cross-Component Interactions
+
+| Direction | Component | Mechanism | Data Exchanged |
+|---|---|---|---|
+| This → Steps/ApprovalDecisions storage | outbound call | SQL read/write | waiting approval rows, expiry decisions |
+| This → OutboxDispatcher | outbound call | outbox enqueue | `approval_escalated`, `approval_expired` events |
+| This → MetricsExporter | outbound call | in-process API | escalation and timeout counters |
+
 ### SPEC: ModuleRegistry
 
 **File:** `internal/registry/module_registry.go`
@@ -2521,7 +2656,7 @@ Validation rules used by this component:
 
 ```go
 type ModuleRegistry interface {
-    Register(module Module)
+    Register(module Module) error
     Lookup(moduleKey string, version string) (Module, bool)
 }
 ```
@@ -3254,9 +3389,20 @@ type Dispatcher interface {
 #### Internal Logic (step-by-step)
 
 1. Claim pending outbox rows with SKIP LOCKED.
+2. Validate event type against dispatcher registry (`approval_requested`, `approval_decided`, `approval_escalated`, `approval_expired`, and other configured types).
 2. Sign payload with active HMAC key and attach signature headers.
 3. POST to callback_url with 10-second timeout.
 4. Mark delivered on 2xx, retry on 5xx/network error, and move to dlq when attempts exhausted.
+
+#### Approval Event Registration Contract
+
+- Dispatcher MUST register these approval lifecycle types at startup:
+  - `approval_requested`
+  - `approval_decided`
+  - `approval_escalated`
+  - `approval_expired`
+- Enqueue attempts for unknown event types MUST fail fast.
+- Approval event payloads are immutable once queued.
 
 ---
 
@@ -3601,8 +3747,16 @@ type Exporter interface {
 #### Internal Logic (step-by-step)
 
 1. Register metric families used by API, scheduler, runner, outbox, and reconciler.
-2. Expose metrics endpoint through HTTP server.
-3. Ensure bounded label cardinality for tenant and component labels.
+2. Register approval lifecycle metrics:
+   - `re_approval_requests_total{tenant_id,path_key,step_key}`
+   - `re_approval_decisions_total{tenant_id,path_key,step_key,decision}`
+   - `re_approval_latency_seconds{tenant_id,path_key}`
+   - `re_approval_escalations_total{tenant_id,path_key}`
+   - `re_approval_timeouts_total{tenant_id,path_key}`
+   - `re_approval_worker_tick_duration_seconds{status}`
+3. Expose metrics endpoint through HTTP server.
+4. Provide in-process recording helpers consumed by `ApprovalService` and `ApprovalWorker`.
+5. Ensure bounded label cardinality for tenant and component labels.
 
 ---
 
@@ -3666,6 +3820,14 @@ Feature: MetricsExporter
 - **Log events:** `metricsexporter.start`, `metricsexporter.success`, `metricsexporter.failure`
 - **Metrics:** `release_engine_metricsexporter_total{status}`, `release_engine_metricsexporter_duration_seconds`
 - **Trace span:** `observability.metrics`
+
+Approval-specific telemetry emitted through this component:
+- `re_approval_requests_total`
+- `re_approval_decisions_total`
+- `re_approval_latency_seconds`
+- `re_approval_escalations_total`
+- `re_approval_timeouts_total`
+- `re_approval_worker_tick_duration_seconds`
 
 ---
 

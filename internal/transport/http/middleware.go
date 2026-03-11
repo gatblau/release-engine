@@ -30,6 +30,7 @@ const (
 type AuthClaims struct {
 	Subject   string `json:"sub"`
 	TenantID  string `json:"tenant_id"`
+	Role      string `json:"role"`
 	Issuer    string `json:"iss"`
 	Audience  string `json:"aud"`
 	ExpiresAt int64  `json:"exp"`
@@ -409,6 +410,7 @@ func (m *authMiddleware) Process(next echo.HandlerFunc) echo.HandlerFunc {
 		authClaims := AuthClaims{
 			Subject:   (*claims)["sub"].(string),
 			TenantID:  (*claims)["tenant_id"].(string),
+			Role:      claimAsString(*claims, "role"),
 			Issuer:    (*claims)["iss"].(string),
 			Audience:  (*claims)["aud"].(string),
 			ExpiresAt: int64((*claims)["exp"].(float64)),
@@ -500,4 +502,16 @@ func GetTenantID(c echo.Context) string {
 		return ""
 	}
 	return tenantID
+}
+
+func claimAsString(claims jwt.MapClaims, key string) string {
+	value, ok := claims[key]
+	if !ok {
+		return ""
+	}
+	stringValue, ok := value.(string)
+	if !ok {
+		return ""
+	}
+	return stringValue
 }

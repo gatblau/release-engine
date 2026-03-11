@@ -39,7 +39,11 @@ CREATE TYPE effect_status AS ENUM (
 
 	// SchemaStepStatus creates the step_status enum type.
 	SchemaStepStatus = `
-CREATE TYPE step_status AS ENUM ('ok', 'error', 'skipped');`
+CREATE TYPE step_status AS ENUM ('ok', 'error', 'skipped', 'waiting_approval');`
+
+	// SchemaApprovalDecision creates the approval_decision enum type.
+	SchemaApprovalDecision = `
+CREATE TYPE approval_decision AS ENUM ('approved', 'rejected', 'expired');`
 
 	// SchemaJobs creates the jobs table.
 	// Based on design spec §12.1
@@ -206,12 +210,43 @@ CREATE TABLE IF NOT EXISTS steps (
 	started_at timestamptz NOT NULL DEFAULT now(),
 	finished_at timestamptz,
 	duration_ms int,
+	approval_request jsonb,
+	approval_ttl interval,
+	approval_expires_at timestamptz,
 	UNIQUE (job_id, attempt, step_key)
 );`
 
 	// SchemaStepsJobAttemptIdx creates index for step resumption on retry.
 	SchemaStepsJobAttemptIdx = `
 CREATE INDEX IF NOT EXISTS steps_job_attempt_idx ON steps (job_id, attempt);`
+
+	// SchemaApprovalDecisions creates the approval_decisions table.
+	SchemaApprovalDecisions = `
+CREATE TABLE IF NOT EXISTS approval_decisions (
+	id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+	job_id uuid NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+	step_id bigint NOT NULL REFERENCES steps(id) ON DELETE CASCADE,
+	run_id uuid NOT NULL,
+	decision approval_decision NOT NULL,
+	approver text NOT NULL,
+	justification text,
+	policy_snapshot jsonb NOT NULL,
+	idempotency_key text NOT NULL,
+	created_at timestamptz NOT NULL DEFAULT now(),
+	CONSTRAINT uq_approval_per_approver UNIQUE (step_id, approver),
+	CONSTRAINT uq_idempotency UNIQUE (idempotency_key)
+);`
+
+	SchemaApprovalDecisionsStepIdx = `CREATE INDEX IF NOT EXISTS idx_approval_decisions_step ON approval_decisions(step_id);`
+	SchemaApprovalDecisionsJobIdx  = `CREATE INDEX IF NOT EXISTS idx_approval_decisions_job ON approval_decisions(job_id);`
+
+	// SchemaJobsPendingApprovals creates the jobs_with_pending_approvals view.
+	SchemaJobsWithPendingApprovals = `
+CREATE OR REPLACE VIEW jobs_with_pending_approvals AS
+SELECT DISTINCT j.*
+FROM jobs j
+JOIN steps s ON s.job_id = j.id
+WHERE s.status = 'waiting_approval';`
 
 	// SchemaJobContext creates the job_context table.
 	// Based on design spec §12.7
@@ -393,6 +428,7 @@ var SchemaAll = []string{
 	SchemaEffectKind,
 	SchemaEffectStatus,
 	SchemaStepStatus,
+	SchemaApprovalDecision,
 	// Core tables
 	SchemaMigrations,
 	SchemaJobs,
@@ -400,6 +436,8 @@ var SchemaAll = []string{
 	SchemaOutbox,
 	SchemaExternalEffects,
 	SchemaSteps,
+	SchemaApprovalDecisions,
+	SchemaJobsWithPendingApprovals,
 	SchemaJobContext,
 	SchemaConnectorCallLog,
 	SchemaIdempotencyKeys,
@@ -416,6 +454,8 @@ var SchemaAll = []string{
 	SchemaExternalEffectsInFlightIdx,
 	SchemaExternalEffectsDlqIdx,
 	SchemaStepsJobAttemptIdx,
+	SchemaApprovalDecisionsStepIdx,
+	SchemaApprovalDecisionsJobIdx,
 	SchemaJobContextJobIdx,
 	SchemaConnectorCallLogCallIdIdx,
 	SchemaConnectorCallLogEffectIdIdx,

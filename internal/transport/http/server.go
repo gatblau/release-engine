@@ -65,8 +65,11 @@ func (s *server) RegisterRoutes() {
 		NewRateLimiterMiddleware(rateLimiterConfig, rateLimiterRefill, s.logger),
 	)
 	api.POST("/jobs", jobHandler.CreateJob)
+	api.GET("/jobs", jobHandler.ListJobs)
 	api.GET("/jobs/:id", jobHandler.GetJob)
 	api.POST("/jobs/:id/cancel", jobHandler.CancelJob)
+	api.POST("/jobs/:job_id/steps/:step_id/decisions", jobHandler.SubmitDecision)
+	api.GET("/jobs/:job_id/steps/:step_id/approval-context", jobHandler.GetApprovalContext)
 }
 
 func (s *server) Start(ctx context.Context) error {

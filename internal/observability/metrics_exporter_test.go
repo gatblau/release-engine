@@ -249,6 +249,59 @@ func TestMetricsExporter_RecordScrape_WithAssertions(t *testing.T) {
 	assert.True(t, foundTotalRequests, "total requests metric should exist")
 }
 
+func TestMetricsExporter_ApprovalCollectorsRegistered(t *testing.T) {
+	logger, _ := zap.NewDevelopment()
+	exporter := NewMetricsExporter(logger, 8080)
+
+	err := exporter.RegisterCollectors()
+	require.NoError(t, err)
+
+	approvalCollectorKeys := []string{
+		"approval_requests_total",
+		"approval_decisions_total",
+		"approval_latency_seconds",
+		"approval_escalations_total",
+		"approval_timeouts_total",
+		"approval_worker_tick_duration_seconds",
+	}
+
+	for _, key := range approvalCollectorKeys {
+		collector, exists := exporter.collectors[key]
+		assert.True(t, exists, "collector %s should be registered", key)
+		assert.NotNil(t, collector, "collector %s should not be nil", key)
+	}
+}
+
+func TestMetricsExporter_ApprovalRecordersEmitSamples(t *testing.T) {
+	logger, _ := zap.NewDevelopment()
+	exporter := NewMetricsExporter(logger, 8080)
+
+	err := exporter.RegisterCollectors()
+	require.NoError(t, err)
+
+	exporter.RecordApprovalRequest("acme-prod", "deploy-production", "step-1")
+	exporter.RecordApprovalDecision("acme-prod", "deploy-production", "step-1", "approved")
+	exporter.RecordApprovalLatency("acme-prod", "deploy-production", 2*time.Second)
+	exporter.RecordApprovalEscalation("acme-prod", "deploy-production")
+	exporter.RecordApprovalTimeout("acme-prod", "deploy-production")
+	exporter.RecordApprovalWorkerTick("success", 50*time.Millisecond)
+
+	metrics, err := exporter.registry.Gather()
+	require.NoError(t, err)
+
+	metricNames := make(map[string]bool)
+	for _, m := range metrics {
+		metricNames[m.GetName()] = true
+	}
+
+	assert.True(t, metricNames["re_approval_requests_total"])
+	assert.True(t, metricNames["re_approval_decisions_total"])
+	assert.True(t, metricNames["re_approval_latency_seconds"])
+	assert.True(t, metricNames["re_approval_escalations_total"])
+	assert.True(t, metricNames["re_approval_timeouts_total"])
+	assert.True(t, metricNames["re_approval_worker_tick_duration_seconds"])
+}
+
 // Test RegisterRoutes actually registers a working route
 func TestMetricsExporter_RegisterRoutes_ActuallyWorks(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
