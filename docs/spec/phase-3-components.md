@@ -78,6 +78,9 @@ type JobStatusResponse struct {
 Validation rules used by this component:
 - `tenant_id` regex: `^[a-z0-9][a-z0-9-]{1,62}$`
 - `idempotency_key` regex: `^[a-zA-Z0-9\-_.]{1,128}$`
+- Optional `schedule` must be a valid cron expression.
+- Optional `first_run_at` must be a valid RFC3339 timestamp.
+- Optional `max_attempts` defaults to `3` when omitted or invalid.
 - Maximum request body size: `262144` bytes
 - Callback URL must use HTTPS and must not resolve to blocked private/link-local/metadata ranges.
 
@@ -1353,9 +1356,10 @@ type Service interface {
 #### Internal Logic (step-by-step)
 
 1. Normalise request payload and compute SHA-256 fingerprint.
-2. Attempt insert into idempotency_keys with 48-hour expiry inside intake transaction.
-3. If first write, create `jobs`, `jobs_read`, and initial `outbox` event in same transaction.
-4. If key exists, compare fingerprints: match returns stored response, mismatch returns 409 conflict.
+   - Canonical fingerprint inputs include `path_key`, `params`, optional `callback_url`, optional `schedule`, and optional `first_run_at`.
+2. Reserve idempotency key in `idempotency_keys` with 48-hour expiry inside intake transaction.
+3. On first-write path, create `jobs` and `jobs_read` in the same transaction and persist canonical intake envelope.
+4. On replay path, compare fingerprints: exact match replays the stored canonical envelope (status fixed at first write); mismatch returns `409 ERR_IDEM_CONFLICT`.
 
 ---
 
@@ -1463,6 +1467,9 @@ type JobCreateRequest struct {
     Params         map[string]any `json:"params"`
     IdempotencyKey string         `json:"idempotency_key"`
     CallbackURL    *string        `json:"callback_url,omitempty"`
+    MaxAttempts    int            `json:"max_attempts,omitempty"`
+    FirstRunAt     *time.Time     `json:"first_run_at,omitempty"`
+    Schedule       string         `json:"schedule,omitempty"`
 }
 
 // JobStatusResponse is the GET /v1/jobs/{job_id} schema.
@@ -1530,11 +1537,13 @@ GET    /v1/jobs/:job_id/steps/:step_id/approval-context
 
 1. Validate request body schema and size limit (256 KB).
 2. Validate callback URL against SSRF and allowlist rules.
-3. Authorise action using PolicyEngine (`job:create`, `job:read`, `job:cancel`).
-4. Delegate intake to IdempotencyService and return stable headers (`Idempotency-Key`, `Idempotency-Replayed`, `Location`).
-5. Accept decision submissions for `waiting_approval` steps with idempotency support.
-6. Expose pending approval job queries and step approval context read API.
-7. Enforce decision outcomes:
+3. Validate optional `schedule` as cron expression; reject invalid format with `ERR_INVALID_SCHEDULE`.
+4. Normalise optional `max_attempts` (default `3`) and `first_run_at` (default acceptance time).
+5. Authorise action using PolicyEngine (`job:create`, `job:read`, `job:cancel`).
+6. Delegate intake to IdempotencyService and return stable headers (`Idempotency-Key`, `Idempotency-Replayed`, `Location`).
+7. Accept decision submissions for `waiting_approval` steps with idempotency support.
+8. Expose pending approval job queries and step approval context read API.
+9. Enforce decision outcomes:
    - `rejected` transitions step state to `error` immediately.
    - `approved` keeps step in `waiting_approval` until policy threshold is met.
    - transition to `running` only when `approved_count >= min_approvers`.
@@ -1552,6 +1561,7 @@ This component uses shared Release Engine tables and does not introduce a new ta
 | Condition | HTTP Status | Error Code | Response Body |
 |---|---|---|---|
 | Invalid callback URL | 400 | `ERR_INVALID_CALLBACK_URL` | `{"error":"invalid callback URL","code":"ERR_INVALID_CALLBACK_URL","details":null}` |
+| Invalid schedule cron expression | 400 | `ERR_INVALID_SCHEDULE` | `{"error":"invalid schedule","code":"ERR_INVALID_SCHEDULE","details":null}` |
 | Payload too large | 413 | `ERR_PAYLOAD_TOO_LARGE` | `{"error":"payload too large","code":"ERR_PAYLOAD_TOO_LARGE","details":null}` |
 | Step not waiting approval / decision conflict | 409 | `CONFLICT` | `{"error":"step is not waiting approval","code":"CONFLICT","details":null}` |
 | Approver role forbidden | 403 | `FORBIDDEN` | `{"error":"approver not authorised","code":"FORBIDDEN","details":null}` |
@@ -1798,7 +1808,7 @@ Feature: HealthHandler
 
 #### Purpose
 
-Claims runnable jobs using SKIP LOCKED and weighted fair sharing (DD-06), then dispatches them to the runner.
+Claims runnable jobs using SKIP LOCKED and weighted fair sharing (DD-06), then dispatches them to the runner. Claim semantics include due queued jobs (`next_run_at <= now()`) and expired running jobs (`lease_expires_at <= now()`) in one atomic query.
 
 ---
 
@@ -1883,10 +1893,14 @@ type Scheduler interface {
 #### Internal Logic (step-by-step)
 
 1. Poll every SCHEDULER_POLL_INTERVAL.
-2. Claim up to SCHEDULER_CLAIM_BATCH_SIZE jobs using atomic SQL with run_id fencing.
+2. Claim up to SCHEDULER_CLAIM_BATCH_SIZE jobs using one atomic SQL statement that selects:
+   - queued jobs due by database time (`next_run_at <= now()`), and
+   - running jobs with expired leases (`lease_expires_at <= now()`) for recovery.
+3. Fence ownership by rotating `run_id` on each successful claim.
 3. Apply DWRR fairness by tenant weights and starvation window 10 seconds.
 4. Dispatch claimed jobs to runner queue with lease metadata.
 5. Do not claim steps blocked by unresolved approval gates (`waiting_approval`).
+6. Periodic jobs do not require special claim logic; they re-enter the same due-queue path after runner requeue updates `next_run_at`.
 
 ---
 
@@ -2146,7 +2160,7 @@ Feature: LeaseManager
 
 #### Purpose
 
-Executes claimed jobs, drives step lifecycle, invokes connectors through fenced external effect records, and finalises jobs.
+Executes claimed jobs, drives step lifecycle, invokes connectors through fenced external effect records, and finalises jobs. On successful completion, unscheduled jobs are terminally completed while scheduled jobs are re-queued for their next cron occurrence.
 
 ---
 
@@ -2229,10 +2243,16 @@ type Runner interface {
 
 #### Internal Logic (step-by-step)
 
-1. Load `path_key`, `version`, and `params_json` for `(job_id, run_id)`.
+1. Load `path_key`, `version`, `params_json`, and `schedule` for `(job_id, run_id)`.
 2. Resolve module binding from path and version in `ModuleRegistry`.
 3. Decode `params_json` to `map[string]any` and invoke `module.Execute(ctx, stepAPI, params)`.
 4. Module execution drives step lifecycle through `StepAPI`, including approval gating via `WaitForApproval`.
+5. Finalise with fenced writes (`WHERE id = $id AND run_id = $run_id AND state = 'running'`):
+   - success + no schedule: set `state='succeeded'`, clear lease fields, set `finished_at=now()`.
+   - success + schedule: compute next cron occurrence and set `state='queued'` with `next_run_at=<next occurrence>`.
+   - execution failure: apply bounded backoff (`queued` or `jobs_exhausted`).
+6. Synchronise `jobs_read` projection on every finalisation path and enqueue `job.succeeded` outbox event after successful module execution.
+7. Treat 0-row finalisation updates as fenced conflicts (lost lease) and stop local processing.
 
 ---
 

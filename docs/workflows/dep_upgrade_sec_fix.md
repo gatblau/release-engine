@@ -23,6 +23,11 @@ What value it delivers:
 - Full audit trail with CVE references, diff, and merge status
 - Safe escalation: AI Code Agent only invoked when CI fails
 
+## Release Engine Capability Mapping
+
+- **Approval model (hybrid):** recommendation review can happen in Backstage and may optionally map to an engine-native `waiting_approval` step before patch application.
+- **Recurrent jobs (recommended):** continuous CVE sweeps should run on a cron `schedule` (for example daily).
+
 ## Value — TechOps as a Product
 
 | Value Dimension | T-Shirt Size  | Notes |
@@ -66,7 +71,7 @@ sequenceDiagram
 
     rect rgb(224, 242, 254)
         Note over Developer,ReleaseEngine: Both paths converge — Backstage submits to Release Engine
-        Backstage->>ReleaseEngine: submit job (idempotency_key, intent, callback_url)
+        Backstage->>ReleaseEngine: submit job (idempotency_key, intent, callback_url, schedule?)
         ReleaseEngine-->>Backstage: 202 Accepted (job_id)
     end
 

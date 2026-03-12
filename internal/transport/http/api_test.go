@@ -95,6 +95,62 @@ func TestJobHandler_CreateJob_IdempotencyConflict(t *testing.T) {
 	assert.Contains(t, rec2.Body.String(), "ERR_IDEM_CONFLICT")
 }
 
+func TestJobHandler_CreateJob_IdempotencyConflict_DifferentSchedule(t *testing.T) {
+	e := echo.New()
+	h := NewJobHandler()
+
+	body1 := `{"tenant_id":"acme-prod","path_key":"deploy-production","params":{"version":"1.2.3"},"idempotency_key":"idem-schedule-conflict","schedule":"*/5 * * * *"}`
+	req1 := httptest.NewRequest(http.MethodPost, "/v1/jobs", bytes.NewBufferString(body1))
+	req1.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec1 := httptest.NewRecorder()
+	c1 := e.NewContext(req1, rec1)
+	err := h.CreateJob(c1)
+	assert.NoError(t, err)
+	assert.Equal(t, http.StatusAccepted, rec1.Code)
+
+	body2 := `{"tenant_id":"acme-prod","path_key":"deploy-production","params":{"version":"1.2.3"},"idempotency_key":"idem-schedule-conflict","schedule":"*/10 * * * *"}`
+	req2 := httptest.NewRequest(http.MethodPost, "/v1/jobs", bytes.NewBufferString(body2))
+	req2.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec2 := httptest.NewRecorder()
+	c2 := e.NewContext(req2, rec2)
+	err = h.CreateJob(c2)
+	assert.NoError(t, err)
+	assert.Equal(t, http.StatusConflict, rec2.Code)
+	assert.Contains(t, rec2.Body.String(), "ERR_IDEM_CONFLICT")
+}
+
+func TestJobHandler_CreateJob_InvalidSchedule(t *testing.T) {
+	e := echo.New()
+	body := bytes.NewBufferString(`{"tenant_id":"acme-prod","path_key":"deploy-production","params":{},"idempotency_key":"idem-invalid-schedule","schedule":"not-a-cron"}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/jobs", body)
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	h := NewJobHandler()
+	err := h.CreateJob(c)
+
+	assert.NoError(t, err)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), "ERR_INVALID_SCHEDULE")
+}
+
+func TestJobHandler_CreateJob_ValidSchedule(t *testing.T) {
+	e := echo.New()
+	body := bytes.NewBufferString(`{"tenant_id":"acme-prod","path_key":"deploy-production","params":{},"idempotency_key":"idem-valid-schedule","schedule":"*/15 * * * *"}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/jobs", body)
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	h := NewJobHandler()
+	err := h.CreateJob(c)
+
+	assert.NoError(t, err)
+	assert.Equal(t, http.StatusAccepted, rec.Code)
+	assert.Equal(t, "false", rec.Header().Get("Idempotency-Replayed"))
+}
+
 func TestJobHandler_CreateJob_InvalidIdempotencyKey(t *testing.T) {
 	e := echo.New()
 	body := bytes.NewBufferString(`{"tenant_id":"acme-prod","path_key":"deploy-production","params":{},"idempotency_key":"invalid key"}`)

@@ -2,18 +2,24 @@
 
 This document provides an overview of all workflows available in the Release Engine.
 
-| Workflow Name                                                 | Purpose | Value Score | Value % | Audience |
-|---------------------------------------------------------------|---|:---:|:---:|---|
-| [Infrastructure Provisioning](infra_provision.md)             | Self-service infrastructure provisioning via Backstage template → Release Engine → Crossplane GitOps | 40/40 | 100% | Dev |
-| [Scaffold Service](scaffold_service.md)                       | Golden Path workflow for creating new services from templates | 34/40 | 85% | Dev |
-| [Incident Management](incident_mgmt.md)                       | AI-coordinated incident response with triage and remediation workflows | 32/40 | 80% | Dev, Ops |
-| [Dependency Upgrade and Security Fix](dep_upgrade_sec_fix.md) | Automated dependency upgrade and CVE remediation workflow | 29/40 | 72.5% | Dev, Ops |
-| [Environment Promotion](env_promotion.md)                     | Automated multi-environment promotion pipeline (Dev → Staging → Production) | 29/40 | 72.5% | Dev |
-| [Cost and Capacity Optimisation](cost_optimisation.md)        | AI-driven analysis of cloud cost and Kubernetes resource usage to generate right-sizing recommendations | 26/40 | 65% | Dev, Ops |
-| [Patch Window Orchestration](patch_window.md)                 | Automated node patching workflow with Jira CHG approval and SLI monitoring | 26/40 | 65% | Ops |
-| [Flaky Test Triage](flaky_test.md)                            | AI-assisted triage of flaky test failures in CI | 22/40 | 55% | Dev |
-| [Restore](restore.md)                                         | Incident-driven service restore workflow with AI-powered snapshot selection | 20/40 | 50% | Ops |
-| [Backup](backup.md)                                           | Automated, GitOps-driven backup orchestration for Kubernetes services | 16/40 | 40% | Ops |
+| Workflow Name                                                 | Purpose | Value Score | Value % | Audience | Approval Mode | Recurrent Mode |
+|---------------------------------------------------------------|---|:---:|:---:|---|---|---|
+| [Infrastructure Provisioning](infra_provision.md)             | Self-service infrastructure provisioning via Backstage template → Release Engine → Crossplane GitOps | 40/40 | 100% | Dev | Optional engine-native (`waiting_approval`) | Optional (`schedule`) |
+| [Scaffold Service](scaffold_service.md)                       | Golden Path workflow for creating new services from templates | 34/40 | 85% | Dev | Optional engine-native (`waiting_approval`) | Optional (`schedule`) |
+| [Incident Management](incident_mgmt.md)                       | AI-coordinated incident response with triage and remediation workflows | 32/40 | 80% | Dev, Ops | Engine-native (`waiting_approval`) | Optional (`schedule`) |
+| [Dependency Upgrade and Security Fix](dep_upgrade_sec_fix.md) | Automated dependency upgrade and CVE remediation workflow | 29/40 | 72.5% | Dev, Ops | Hybrid: Backstage review + optional engine-native gate | Recommended (`schedule`) for continuous CVE sweeps |
+| [Environment Promotion](env_promotion.md)                     | Automated multi-environment promotion pipeline (Dev → Staging → Production) | 29/40 | 72.5% | Dev | Engine-native (`waiting_approval`) | Optional (`schedule`) |
+| [Cost and Capacity Optimisation](cost_optimisation.md)        | AI-driven analysis of cloud cost and Kubernetes resource usage to generate right-sizing recommendations | 26/40 | 65% | Dev, Ops | Engine-native (`waiting_approval`) | Recommended (`schedule`) |
+| [Patch Window Orchestration](patch_window.md)                 | Automated node patching workflow with Jira CHG approval and SLI monitoring | 26/40 | 65% | Ops | External (Jira CHG) | Optional (`schedule`) |
+| [Flaky Test Triage](flaky_test.md)                            | AI-assisted triage of flaky test failures in CI | 22/40 | 55% | Dev | Human PR review + optional engine-native gate | Optional (`schedule`) |
+| [Restore](restore.md)                                         | Incident-driven service restore workflow with AI-powered snapshot selection | 20/40 | 50% | Ops | Optional engine-native (`waiting_approval`) | Typically on-demand (no recurrence) |
+| [Backup](backup.md)                                           | Automated, GitOps-driven backup orchestration for Kubernetes services | 16/40 | 40% | Ops | Optional engine-native (`waiting_approval`) | Primary mode (`schedule`) |
+
+### Capability Notes
+
+- **Engine-native approval** means workflow steps can enter `waiting_approval` and resume through `POST /v1/jobs/{job_id}/steps/{step_id}/decisions`.
+- **Recurrent mode** means intake can include `schedule` (cron expression). Scheduled jobs re-queue after successful runs with the next occurrence time.
+- **External approval** (for example Jira CHG) is intentionally outside the Release Engine approval step model.
 
 ## Value Score Breakdown
 

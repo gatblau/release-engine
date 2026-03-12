@@ -23,6 +23,11 @@ What value it delivers:
 - Every backup is recorded with full audit trail (timestamp, snapshot ID, integrity status)
 - Developers can request backups via Backstage without filing tickets to TechOps
 
+## Release Engine Capability Mapping
+
+- **Recurrent jobs (primary mode):** backup runs can be submitted with `schedule` (cron expression). On successful completion, the job is re-queued for the next occurrence.
+- **Human in the Loop (optional):** for production backups, an explicit approval step can be inserted before quiescing writers (`waiting_approval` → decision API).
+
 ## Value — TechOps as a Product
 
 | Value Dimension | T-Shirt Size | Notes |
@@ -60,7 +65,7 @@ sequenceDiagram
 
     rect rgb(220, 252, 231)
         Note over Backstage,ReleaseEngine: Job Submission
-        Backstage->>ReleaseEngine: submit job (idempotency_key, params, callback_url)
+        Backstage->>ReleaseEngine: submit job (idempotency_key, params, callback_url, schedule?)
         ReleaseEngine-->>Backstage: 202 Accepted (job_id)
     end
 
@@ -76,6 +81,7 @@ sequenceDiagram
         AIAgent->>Kubernetes: check service health and replication lag
         Kubernetes-->>AIAgent: service healthy — replication lag within threshold
         AIAgent-->>ReleaseEngine: pre-flight passed — safe to proceed with backup
+        Note over ReleaseEngine: optional production guardrail — wait in `waiting_approval` before quiesce
     end
 
     rect rgb(255, 237, 213)

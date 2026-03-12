@@ -23,6 +23,11 @@ What value it delivers:
 - Templates include linting, testing, security scanning, and deployment pipelines by default
 - Developers create services without any hand-offs to TechOps or platform teams
 
+## Release Engine Capability Mapping
+
+- **Human in the Loop (optional):** high-impact scaffolds (for example production-facing templates) can pause in `waiting_approval` before repository creation.
+- **Recurrent jobs (optional):** scaffolding is usually on-demand, but periodic template-compliance checks can be scheduled via `schedule`.
+
 ## Value — TechOps as a Product
 
 | Value Dimension | T-Shirt Size  | Notes |
@@ -55,7 +60,7 @@ sequenceDiagram
 
     rect rgb(220, 252, 231)
         Note over Backstage,ReleaseEngine: Job Submission
-        Backstage->>ReleaseEngine: 2. submit job (idempotency_key, params, callback_url)
+        Backstage->>ReleaseEngine: 2. submit job (idempotency_key, params, callback_url, schedule?)
         ReleaseEngine-->>Backstage: 3. 202 Accepted (job_id)
     end
 

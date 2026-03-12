@@ -23,6 +23,11 @@ What value it delivers:
 - Human review and merge approval ensures safety
 - Iterative refinement generates revised fixes automatically when initial patches fail CI
 
+## Release Engine Capability Mapping
+
+- **Approval model (hybrid):** PR review remains human-driven in GitHub; optional engine-native `waiting_approval` can gate autonomous patch application in stricter environments.
+- **Recurrent jobs (optional):** besides CI-triggered execution, periodic flaky-suite sweeps can run via `schedule`.
+
 ## Value — TechOps as a Product
 
 | Value Dimension | T-Shirt Size  | Notes |
@@ -52,7 +57,7 @@ sequenceDiagram
 
     rect rgb(224, 242, 254)
         Note over Initiator,CISystem: Trigger — CI failure or manual submission
-        CISystem->>ReleaseEngine: submit job (idempotency_key, test_report, pipeline_ref, callback_url)
+        CISystem->>ReleaseEngine: submit job (idempotency_key, test_report, pipeline_ref, callback_url, schedule?)
         ReleaseEngine-->>CISystem: 202 Accepted (job_id)
     end
 

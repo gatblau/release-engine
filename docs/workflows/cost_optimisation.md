@@ -23,6 +23,11 @@ What value it delivers:
 - Human approval gates ensure operator intent is respected
 - Post-change verification confirms no performance regression
 
+## Release Engine Capability Mapping
+
+- **Human in the Loop (engine-native):** recommendation acceptance is represented as a `waiting_approval` step and resumes after decision submission.
+- **Recurrent jobs (recommended):** continuous optimisation can run as a scheduled job via `schedule` (for example weekly rightsizing).
+
 ## Value — TechOps as a Product
 
 | Value Dimension | T-Shirt Size  | Notes |
@@ -59,7 +64,7 @@ sequenceDiagram
 
     rect rgb(220, 252, 231)
         Note over UI,ReleaseEngine: Job Submission
-        UI->>ReleaseEngine: 2. submit job (idempotency_key, service_ref, scope, callback_url)
+        UI->>ReleaseEngine: 2. submit job (idempotency_key, service_ref, scope, callback_url, schedule?)
         ReleaseEngine-->>UI: 3. 202 Accepted (job_id)
     end
 
@@ -86,9 +91,10 @@ sequenceDiagram
     rect rgb(255, 237, 213)
         Note over ReleaseEngine,UI: Human in the Loop — Review Gate
         ReleaseEngine->>UI: 10. create review task (recommendation, savings estimate, rationale, approve/reject)
+        Note over ReleaseEngine: job waits in `waiting_approval` for explicit decision
         Note over UI: task visible in Backstage or conversational thread
         Developer->>UI: 11a. approve recommendation
-        UI->>ReleaseEngine: 12a. approval confirmed (job_id)
+        UI->>ReleaseEngine: 12a. approval confirmed (job_id, step_id)
     end
 
     rect rgb(220, 252, 231)

@@ -4,11 +4,17 @@ package smoke
 
 import (
 	"context"
+	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/gatblau/release-engine/internal/config"
 	"github.com/gatblau/release-engine/internal/db"
+	"github.com/gatblau/release-engine/internal/registry"
+	"github.com/gatblau/release-engine/internal/runner"
+	"github.com/gatblau/release-engine/internal/scheduler"
 	"github.com/gatblau/release-engine/internal/secrets"
 	"github.com/jackc/pgx/v4"
 	"github.com/stretchr/testify/assert"
@@ -472,4 +478,201 @@ func TestDB_JobLifecycle(t *testing.T) {
 	assert.Equal(t, 1, finalAttempt)
 
 	t.Log("✓ Database job lifecycle test passed")
+}
+
+type countingModule struct {
+	key      string
+	version  string
+	executes *int32
+}
+
+func (m *countingModule) Key() string { return m.key }
+
+func (m *countingModule) Version() string { return m.version }
+
+func (m *countingModule) Execute(_ context.Context, _ any, _ map[string]any) error {
+	atomic.AddInt32(m.executes, 1)
+	return nil
+}
+
+func setupRuntimeSchema(ctx context.Context, t *testing.T, conn *pgx.Conn) {
+	t.Helper()
+
+	_, err := conn.Exec(ctx, `CREATE EXTENSION IF NOT EXISTS pgcrypto`)
+	require.NoError(t, err)
+
+	for _, schema := range db.SchemaAll {
+		_, err = conn.Exec(ctx, schema)
+		require.NoError(t, err)
+	}
+}
+
+func createScheduledJob(ctx context.Context, t *testing.T, conn *pgx.Conn, pathKey string) string {
+	t.Helper()
+
+	idemKey := fmt.Sprintf("idem-%s-%d", strings.ReplaceAll(pathKey, ".", "-"), time.Now().UnixNano())
+	var jobID string
+	err := conn.QueryRow(ctx, `
+		INSERT INTO jobs (
+			tenant_id,
+			path_key,
+			idempotency_key,
+			params_json,
+			schedule,
+			state,
+			attempt,
+			max_attempts,
+			next_run_at,
+			accepted_at,
+			created_at,
+			updated_at
+		)
+		VALUES (
+			'tenant-smoke',
+			$1,
+			$2,
+			'{}'::jsonb,
+			'*/5 * * * *',
+			'queued',
+			0,
+			5,
+			now() - interval '1 second',
+			now(),
+			now(),
+			now()
+		)
+		RETURNING id::text
+	`, pathKey, idemKey).Scan(&jobID)
+	require.NoError(t, err)
+
+	_, err = conn.Exec(ctx, `
+		INSERT INTO jobs_read (
+			id, tenant_id, path_key, state, attempt, max_attempts, schedule, owner_id, run_id,
+			lease_expires_at, next_run_at, accepted_at, last_error_code, last_error_message,
+			started_at, finished_at, created_at, updated_at
+		)
+		SELECT
+			id, tenant_id, path_key, state, attempt, max_attempts, schedule, owner_id, run_id,
+			lease_expires_at, next_run_at, accepted_at, last_error_code, last_error_message,
+			started_at, finished_at, created_at, updated_at
+		FROM jobs
+		WHERE id = $1::uuid
+	`, jobID)
+	require.NoError(t, err)
+
+	return jobID
+}
+
+func readJobState(ctx context.Context, t *testing.T, conn *pgx.Conn, jobID string) (string, int) {
+	t.Helper()
+
+	var state string
+	var attempt int
+	err := conn.QueryRow(ctx, `SELECT state, attempt FROM jobs WHERE id = $1::uuid`, jobID).Scan(&state, &attempt)
+	require.NoError(t, err)
+	return state, attempt
+}
+
+func TestPeriodicJob_RunsMultipleTimes(t *testing.T) {
+	ctx := context.Background()
+	connStr := db.SetupTestPostgres(ctx, t)
+
+	pool, err := db.NewPool(connStr)
+	require.NoError(t, err)
+	defer pool.Close()
+
+	conn, err := pgx.Connect(ctx, connStr)
+	require.NoError(t, err)
+	defer conn.Close(ctx)
+
+	setupRuntimeSchema(ctx, t, conn)
+
+	var executions int32
+	reg := registry.NewModuleRegistry()
+	require.NoError(t, reg.Register(&countingModule{key: "smoke.periodic", version: "latest", executes: &executions}))
+
+	runnerSvc := runner.NewRunnerService(pool, nil, reg)
+	schedulerSvc := scheduler.NewSchedulerService(pool, reg, nil, 25*time.Millisecond, runnerSvc)
+
+	jobID := createScheduledJob(ctx, t, conn, "smoke.periodic")
+
+	runCtx, cancel := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() {
+		done <- schedulerSvc.Start(runCtx)
+	}()
+
+	assert.Eventually(t, func() bool {
+		state, attempt := readJobState(ctx, t, conn, jobID)
+		return state == "queued" && attempt >= 1 && atomic.LoadInt32(&executions) >= 1
+	}, 5*time.Second, 50*time.Millisecond)
+
+	_, err = conn.Exec(ctx, `UPDATE jobs SET next_run_at = now() - interval '1 second', updated_at = now() WHERE id = $1::uuid`, jobID)
+	require.NoError(t, err)
+
+	assert.Eventually(t, func() bool {
+		state, attempt := readJobState(ctx, t, conn, jobID)
+		return state == "queued" && attempt >= 2 && atomic.LoadInt32(&executions) >= 2
+	}, 5*time.Second, 50*time.Millisecond)
+
+	cancel()
+	require.NoError(t, <-done)
+}
+
+func TestPeriodicJob_CanceledStopsFutureRuns(t *testing.T) {
+	ctx := context.Background()
+	connStr := db.SetupTestPostgres(ctx, t)
+
+	pool, err := db.NewPool(connStr)
+	require.NoError(t, err)
+	defer pool.Close()
+
+	conn, err := pgx.Connect(ctx, connStr)
+	require.NoError(t, err)
+	defer conn.Close(ctx)
+
+	setupRuntimeSchema(ctx, t, conn)
+
+	var executions int32
+	reg := registry.NewModuleRegistry()
+	require.NoError(t, reg.Register(&countingModule{key: "smoke.cancel", version: "latest", executes: &executions}))
+
+	runnerSvc := runner.NewRunnerService(pool, nil, reg)
+	schedulerSvc := scheduler.NewSchedulerService(pool, reg, nil, 25*time.Millisecond, runnerSvc)
+
+	jobID := createScheduledJob(ctx, t, conn, "smoke.cancel")
+
+	runCtx, cancel := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() {
+		done <- schedulerSvc.Start(runCtx)
+	}()
+
+	assert.Eventually(t, func() bool {
+		state, attempt := readJobState(ctx, t, conn, jobID)
+		return state == "queued" && attempt >= 1 && atomic.LoadInt32(&executions) >= 1
+	}, 5*time.Second, 50*time.Millisecond)
+
+	stateBeforeCancel, attemptBeforeCancel := readJobState(ctx, t, conn, jobID)
+	require.Equal(t, "queued", stateBeforeCancel)
+
+	_, err = conn.Exec(ctx, `
+		UPDATE jobs
+		SET state = 'canceled',
+			cancel_requested_at = now(),
+			next_run_at = now() - interval '1 second',
+			updated_at = now()
+		WHERE id = $1::uuid
+	`, jobID)
+	require.NoError(t, err)
+
+	time.Sleep(300 * time.Millisecond)
+
+	stateAfterCancel, attemptAfterCancel := readJobState(ctx, t, conn, jobID)
+	assert.Equal(t, "canceled", stateAfterCancel)
+	assert.Equal(t, attemptBeforeCancel, attemptAfterCancel)
+	assert.Equal(t, int32(1), atomic.LoadInt32(&executions))
+
+	cancel()
+	require.NoError(t, <-done)
 }

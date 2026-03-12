@@ -23,6 +23,11 @@ What value it delivers:
 - Full audit trail with Jira ticket, commit SHA, and SLI snapshots
 - Zero manual intervention after approval — the workflow runs to completion autonomously
 
+## Release Engine Capability Mapping
+
+- **Approval model:** this workflow uses an **external** approval source (Jira CHG) rather than engine-native `waiting_approval`.
+- **Recurrent jobs (optional):** patch windows can be submitted with `schedule` for pre-approved recurring maintenance windows.
+
 ## Value — TechOps as a Product
 
 | Value Dimension | T-Shirt Size  | Notes |
@@ -59,7 +64,7 @@ sequenceDiagram
 
     rect rgb(220, 252, 231)
         Note over Backstage,ReleaseEngine: Job Submission
-        Backstage->>ReleaseEngine: submit job (idempotency_key, params, callback_url)
+        Backstage->>ReleaseEngine: submit job (idempotency_key, params, callback_url, schedule?)
         ReleaseEngine-->>Backstage: 202 Accepted (job_id)
     end
 

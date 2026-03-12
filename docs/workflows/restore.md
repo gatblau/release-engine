@@ -23,6 +23,11 @@ What value it delivers:
 - GitOps-driven sequence provides complete audit trail and easy rollback
 - Deterministic process removes the chance of human error during incident response
 
+## Release Engine Capability Mapping
+
+- **Human in the Loop (optional):** add an explicit `waiting_approval` step before executing restore in production.
+- **Recurrent jobs (optional):** restore is usually on-demand, but periodic DR drills can be submitted with `schedule`.
+
 ## Value — TechOps as a Product
 
 | Value Dimension | T-Shirt Size  | Notes |
@@ -59,7 +64,7 @@ sequenceDiagram
 
     rect rgb(220, 252, 231)
         Note over Backstage,ReleaseEngine: Job Submission
-        Backstage->>ReleaseEngine: submit job (idempotency_key, params, callback_url)
+        Backstage->>ReleaseEngine: submit job (idempotency_key, params, callback_url, schedule?)
         ReleaseEngine-->>Backstage: 202 Accepted (job_id)
     end
 

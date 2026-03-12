@@ -69,6 +69,11 @@ Policy is applied across all relevant components through middleware, service wra
 
 1. Evaluate incoming request or runtime event against this concern's policy.
 2. Enforce deterministic action (allow, deny, retry, or terminate).
+3. Enforce runner finalisation fencing invariants for job ownership transitions:
+   - Success finalisation must be fenced by `(id, run_id, state='running')`.
+   - Scheduled success requeue (`running -> queued`) and unscheduled success finalisation (`running -> succeeded`) use the same fence contract.
+   - `0` affected rows is treated as lost ownership (`ERR_FENCED_CONFLICT`) and no local state mutation proceeds.
+   - Scheduler/lease comparisons remain based on database time (`now()`).
 3. Persist required state transitions and audit evidence.
 4. Emit logs, metrics, and traces with standard fields.
 5. Approval lifecycle metrics MUST be emitted at runtime hooks:
@@ -1519,6 +1524,14 @@ Policy is applied across all relevant components through middleware, service wra
 
 1. Evaluate incoming request or runtime event against this concern's policy.
 2. Enforce deterministic action (allow, deny, retry, or terminate).
+3. For `POST /v1/jobs`, enforce intake contract:
+   - max body size `262144` bytes
+   - `idempotency_key` pattern `^[a-zA-Z0-9\-_.]{1,128}$`
+   - optional `callback_url` SSRF checks
+   - optional `schedule` must parse as cron, otherwise `ERR_INVALID_SCHEDULE`
+   - optional `first_run_at` must be RFC3339 when provided
+   - optional `max_attempts` defaults to `3` when omitted/invalid
+4. Canonicalise idempotency fingerprint inputs as: `path_key`, `params`, and optional `callback_url`, `schedule`, `first_run_at`.
 3. Persist required state transitions and audit evidence.
 4. Emit logs, metrics, and traces with standard fields.
 
@@ -1535,6 +1548,7 @@ Uses shared tables (`jobs`, `jobs_read`, `outbox`, `external_effects`, `idempote
 | Condition | HTTP Status | Error Code | Response Body |
 |---|---|---|---|
 | Policy or validation violation | 400 | `POLICY_VIOLATION` | `{"error":"policy violation","code":"POLICY_VIOLATION","details":null}` |
+| Invalid schedule expression | 400 | `ERR_INVALID_SCHEDULE` | `{"error":"invalid schedule","code":"ERR_INVALID_SCHEDULE","details":null}` |
 | Runtime dependency unavailable | 503 | `SERVICE_UNAVAILABLE` | `{"error":"service unavailable","code":"SERVICE_UNAVAILABLE","details":null}` |
 
 ---

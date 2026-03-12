@@ -23,6 +23,11 @@ What value it delivers:
 - Argo CD health checks verify stability before promotion proceeds
 - GitOps-driven approach enables instant rollback via commit revert
 
+## Release Engine Capability Mapping
+
+- **Human in the Loop (engine-native):** staging and production gates map to `waiting_approval` steps and resume through the decisions API.
+- **Recurrent jobs (optional):** promotion checks can be scheduled (for example nightly candidate promotion windows) via `schedule`.
+
 ## Value — TechOps as a Product
 
 | Value Dimension | T-Shirt Size  | Notes |
@@ -57,7 +62,7 @@ sequenceDiagram
 
     rect rgb(220, 252, 231)
         Note over Backstage,ReleaseEngine: Job Submission
-        Backstage->>ReleaseEngine: 2. submit job (idempotency_key, params, callback_url)
+        Backstage->>ReleaseEngine: 2. submit job (idempotency_key, params, callback_url, schedule?)
         ReleaseEngine-->>Backstage: 3. 202 Accepted (job_id)
     end
 
@@ -90,9 +95,10 @@ sequenceDiagram
         ReleaseEngine->>EnvConfigRepo: 12. raise PR to promote to stg branch
         EnvConfigRepo-->>ReleaseEngine: 13. PR url confirmed
         ReleaseEngine->>Backstage: 14. create approval task (pr_url, target_env=stg, job_id)
+        Note over ReleaseEngine: job step is parked in `waiting_approval` until decision is recorded
         Backstage->>Developer: 15. notify — approval required for stg promotion
         Developer->>Backstage: 16. approved
-        Backstage->>ReleaseEngine: 17. approval confirmed (job_id)
+        Backstage->>ReleaseEngine: 17. approval confirmed (job_id, step_id)
         ReleaseEngine->>EnvConfigRepo: 18. merge PR to stg branch
         EnvConfigRepo-->>ReleaseEngine: 19. merge sha confirmed
     end
@@ -111,9 +117,10 @@ sequenceDiagram
         ReleaseEngine->>EnvConfigRepo: 24. raise PR to promote to prod branch
         EnvConfigRepo-->>ReleaseEngine: 25. PR url confirmed
         ReleaseEngine->>Backstage: 26. create approval task (pr_url, target_env=prod, job_id)
+        Note over ReleaseEngine: same `waiting_approval` gate for production promotion
         Backstage->>Developer: 27. notify — mandatory approval required for prod promotion
         Developer->>Backstage: 28. approved
-        Backstage->>ReleaseEngine: 29. approval confirmed (job_id)
+        Backstage->>ReleaseEngine: 29. approval confirmed (job_id, step_id)
         ReleaseEngine->>EnvConfigRepo: 30. merge PR to prod branch
         EnvConfigRepo-->>ReleaseEngine: 31. merge sha confirmed
     end

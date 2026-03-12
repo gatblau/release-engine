@@ -23,6 +23,11 @@ What value it delivers:
 - Full traceability with parent-child job relationships enables thorough post-mortem analysis
 - Self-healing workflows (rollback, scale-out, config revert, failover) provide automated remediation for common patterns
 
+## Release Engine Capability Mapping
+
+- **Human in the Loop (engine-native):** triage and child-remediation gates map to `waiting_approval` steps and resume through decision submission.
+- **Recurrent jobs (optional):** proactive incident hygiene runs (for example periodic risk triage) can be scheduled via `schedule`.
+
 ## Value — TechOps as a Product
 
 | Value Dimension | T-Shirt Size  | Notes |

@@ -23,6 +23,11 @@ What value it delivers:
 - Any developer can provision infrastructure in minutes without waiting for an ops engineer
 - GitOps ensures every change is version-controlled, reviewed, and traceable
 
+## Release Engine Capability Mapping
+
+- **Human in the Loop (optional):** for high-blast-radius templates, insert an explicit `waiting_approval` step before committing manifests.
+- **Recurrent jobs (optional):** generally on-demand, but can run with `schedule` for periodic drift-probe or reconciliation workflows.
+
 ## Value — TechOps as a Product
 
 | Value Dimension | T-Shirt Size  | Notes |
@@ -57,7 +62,7 @@ sequenceDiagram
 
     rect rgb(220, 252, 231)
         Note over Backstage,ReleaseEngine: Job Submission
-        Backstage->>ReleaseEngine: 2. submit job (idempotency_key, params, callback_url)
+        Backstage->>ReleaseEngine: 2. submit job (idempotency_key, params, callback_url, schedule?)
         ReleaseEngine-->>Backstage: 3. 202 Accepted (job_id)
     end
 

@@ -2,11 +2,17 @@ package runner
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/gatblau/release-engine/internal/db"
 	"github.com/gatblau/release-engine/internal/registry"
+	"github.com/gorhill/cronexpr"
+	"github.com/jackc/pgx/v4"
 )
 
 // RunnerService executes claimed jobs, drives step lifecycle, and finalises jobs.
@@ -42,8 +48,9 @@ func (s *runnerService) RunJob(ctx context.Context, jobID string, runID string) 
 	// 1. Fetch job definition
 	var pathKey, version string
 	var paramsRaw []byte
+	var schedule sql.NullString
 	var attempt int
-	err = conn.QueryRow(ctx, "SELECT path_key, COALESCE(params_json->>'version', 'latest'), params_json, attempt FROM jobs WHERE id = $1::uuid AND run_id = $2::uuid AND state = 'running'", jobID, runID).Scan(&pathKey, &version, &paramsRaw, &attempt)
+	err = conn.QueryRow(ctx, "SELECT path_key, COALESCE(params_json->>'version', 'latest'), params_json, schedule, attempt FROM jobs WHERE id = $1::uuid AND run_id = $2::uuid AND state = 'running'", jobID, runID).Scan(&pathKey, &version, &paramsRaw, &schedule, &attempt)
 	if err != nil {
 		return fmt.Errorf("failed to fetch job: %w", err)
 	}
@@ -90,17 +97,51 @@ func (s *runnerService) finaliseSuccess(ctx context.Context, jobID, runID string
 	}
 	defer conn.Release()
 
-	tag, err := conn.Exec(ctx, `
-		UPDATE jobs
-		SET state = 'succeeded',
-			owner_id = NULL,
-			lease_expires_at = NULL,
-			next_run_at = NULL,
-			last_error_code = NULL,
-			last_error_message = NULL,
-			finished_at = now(),
-			updated_at = now()
-		WHERE id = $1::uuid AND run_id = $2::uuid AND state = 'running'`, jobID, runID)
+	var schedule sql.NullString
+	var dbNow time.Time
+	err = conn.QueryRow(ctx,
+		"SELECT schedule, now() FROM jobs WHERE id = $1::uuid AND run_id = $2::uuid AND state = 'running'",
+		jobID,
+		runID,
+	).Scan(&schedule, &dbNow)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("fenced conflict while finalising success")
+		}
+		return fmt.Errorf("failed to fetch schedule for success finalization: %w", err)
+	}
+
+	nextRunAt, shouldRequeue, err := computeNextRunAt(schedule, dbNow)
+	if err != nil {
+		return err
+	}
+
+	var tag interface{ RowsAffected() int64 }
+	if shouldRequeue {
+		tag, err = conn.Exec(ctx, `
+			UPDATE jobs
+			SET state = 'queued',
+				owner_id = NULL,
+				lease_expires_at = NULL,
+				next_run_at = $3,
+				last_error_code = NULL,
+				last_error_message = NULL,
+				finished_at = NULL,
+				updated_at = now()
+			WHERE id = $1::uuid AND run_id = $2::uuid AND state = 'running'`, jobID, runID, nextRunAt)
+	} else {
+		tag, err = conn.Exec(ctx, `
+			UPDATE jobs
+			SET state = 'succeeded',
+				owner_id = NULL,
+				lease_expires_at = NULL,
+				next_run_at = NULL,
+				last_error_code = NULL,
+				last_error_message = NULL,
+				finished_at = now(),
+				updated_at = now()
+			WHERE id = $1::uuid AND run_id = $2::uuid AND state = 'running'`, jobID, runID)
+	}
 	if err != nil {
 		return fmt.Errorf("failed to finalise success: %w", err)
 	}
@@ -109,15 +150,16 @@ func (s *runnerService) finaliseSuccess(ctx context.Context, jobID, runID string
 	}
 
 	_, _ = conn.Exec(ctx, `
-		INSERT INTO jobs_read AS r (id, tenant_id, path_key, state, attempt, max_attempts, owner_id, run_id,
+		INSERT INTO jobs_read AS r (id, tenant_id, path_key, state, attempt, max_attempts, schedule, owner_id, run_id,
 			lease_expires_at, next_run_at, accepted_at, last_error_code, last_error_message, started_at, finished_at, created_at, updated_at)
-		SELECT id, tenant_id, path_key, state, attempt, max_attempts, owner_id, run_id,
+		SELECT id, tenant_id, path_key, state, attempt, max_attempts, schedule, owner_id, run_id,
 			lease_expires_at, next_run_at, accepted_at, last_error_code, last_error_message, started_at, finished_at, created_at, updated_at
 		FROM jobs WHERE id = $1::uuid
 		ON CONFLICT (id) DO UPDATE
 		SET state = EXCLUDED.state,
 			attempt = EXCLUDED.attempt,
 			max_attempts = EXCLUDED.max_attempts,
+			schedule = EXCLUDED.schedule,
 			owner_id = EXCLUDED.owner_id,
 			run_id = EXCLUDED.run_id,
 			lease_expires_at = EXCLUDED.lease_expires_at,
@@ -167,15 +209,16 @@ func (s *runnerService) finaliseFailure(ctx context.Context, jobID, runID, code,
 	}
 
 	_, _ = conn.Exec(ctx, `
-		INSERT INTO jobs_read AS r (id, tenant_id, path_key, state, attempt, max_attempts, owner_id, run_id,
+		INSERT INTO jobs_read AS r (id, tenant_id, path_key, state, attempt, max_attempts, schedule, owner_id, run_id,
 			lease_expires_at, next_run_at, accepted_at, last_error_code, last_error_message, started_at, finished_at, created_at, updated_at)
-		SELECT id, tenant_id, path_key, state, attempt, max_attempts, owner_id, run_id,
+		SELECT id, tenant_id, path_key, state, attempt, max_attempts, schedule, owner_id, run_id,
 			lease_expires_at, next_run_at, accepted_at, last_error_code, last_error_message, started_at, finished_at, created_at, updated_at
 		FROM jobs WHERE id = $1::uuid
 		ON CONFLICT (id) DO UPDATE
 		SET state = EXCLUDED.state,
 			attempt = EXCLUDED.attempt,
 			max_attempts = EXCLUDED.max_attempts,
+			schedule = EXCLUDED.schedule,
 			owner_id = EXCLUDED.owner_id,
 			run_id = EXCLUDED.run_id,
 			lease_expires_at = EXCLUDED.lease_expires_at,
@@ -189,4 +232,22 @@ func (s *runnerService) finaliseFailure(ctx context.Context, jobID, runID, code,
 			updated_at = EXCLUDED.updated_at`, jobID)
 
 	return nil
+}
+
+func computeNextRunAt(schedule sql.NullString, base time.Time) (time.Time, bool, error) {
+	if !schedule.Valid || strings.TrimSpace(schedule.String) == "" {
+		return time.Time{}, false, nil
+	}
+
+	expr, err := cronexpr.Parse(schedule.String)
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("failed to parse job schedule during success finalization: %w", err)
+	}
+
+	next := expr.Next(base)
+	if next.IsZero() {
+		return time.Time{}, false, fmt.Errorf("failed to compute next run for schedule %q", schedule.String)
+	}
+
+	return next, true, nil
 }
