@@ -2,6 +2,7 @@ package observability
 
 import (
 	"context"
+	"encoding/json"
 	"strconv"
 	"sync"
 	"time"
@@ -20,9 +21,13 @@ type MetricsWriter interface {
 type MetricsEvent struct {
 	TenantID     string
 	JobID        string
+	PathKey      string
+	Attempt      int
 	RunID        string
 	EventType    string
 	Timestamp    time.Time
+	Environment  string
+	CommitSHAs   []string
 	State        string
 	DurationMs   int64
 	ErrorCode    string
@@ -165,22 +170,86 @@ func (m *MetricsSQLWriter) processEvent(event MetricsEvent, workerID int) {
 	}
 	defer conn.Release()
 
-	// Insert event into metrics_job_events table
-	_, err = conn.Exec(ctx,
-		`INSERT INTO metrics_job_events 
-		(tenant_id, job_id, run_id, event_type, timestamp, state, duration_ms, error_code, error_message, metadata, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())`,
-		event.TenantID,
-		event.JobID,
-		event.RunID,
-		event.EventType,
-		event.Timestamp,
-		event.State,
-		event.DurationMs,
-		event.ErrorCode,
-		event.ErrorMessage,
-		encodeMetadata(event.Metadata),
-	)
+	if event.Timestamp.IsZero() {
+		event.Timestamp = time.Now().UTC()
+	}
+
+	labels := encodeMetadata(event.Metadata)
+	doraType := doraEventTypeFromJobEvent(event.EventType)
+
+	if doraType == "" {
+		_, err = conn.Exec(ctx,
+			`INSERT INTO metrics_job_events
+			(ts, tenant_id, job_id, path_key, event, attempt, run_id, code, duration_ms, labels)
+			VALUES ($1, $2, $3::uuid, $4, $5, $6, $7::uuid, $8, $9, $10::jsonb)`,
+			event.Timestamp,
+			event.TenantID,
+			event.JobID,
+			event.PathKey,
+			event.EventType,
+			event.Attempt,
+			event.RunID,
+			event.ErrorCode,
+			event.DurationMs,
+			labels,
+		)
+	} else {
+		payload, payloadErr := json.Marshal(map[string]any{
+			"job_id":      event.JobID,
+			"run_id":      event.RunID,
+			"commit_shas": event.CommitSHAs,
+		})
+		if payloadErr != nil {
+			m.logger.Error("metricssqlwriter.failure",
+				zap.String("component", "MetricsSQLWriter"),
+				zap.Int("worker_id", workerID),
+				zap.Error(payloadErr))
+			m.recordFailure()
+			return
+		}
+
+		outcome := "failed"
+		if doraType == "deployment.succeeded" {
+			outcome = "succeeded"
+		}
+
+		_, err = conn.Exec(ctx,
+			`WITH metrics_insert AS (
+				INSERT INTO metrics_job_events
+				(ts, tenant_id, job_id, path_key, event, attempt, run_id, code, duration_ms, labels)
+				VALUES ($1, $2, $3::uuid, $4, $5, $6, $7::uuid, $8, $9, $10::jsonb)
+			),
+			dora_insert AS (
+				INSERT INTO dora_events
+				(tenant_id, event_type, event_source, service_ref, environment, correlation_key, event_timestamp, payload)
+				VALUES ($2, $11, 'release-engine', $4, $12, $3, $1, $13::jsonb)
+				ON CONFLICT DO NOTHING
+				RETURNING id
+			)
+			INSERT INTO dora_commit_deployment_links
+			(tenant_id, service_ref, commit_sha, deployment_id, deployment_outcome, deployment_time)
+			SELECT $2, $4, sha, di.id, $14, $1
+			FROM dora_insert di
+			CROSS JOIN UNNEST($15::text[]) AS sha
+			WHERE COALESCE(sha, '') <> ''
+			ON CONFLICT DO NOTHING`,
+			event.Timestamp,
+			event.TenantID,
+			event.JobID,
+			event.PathKey,
+			event.EventType,
+			event.Attempt,
+			event.RunID,
+			event.ErrorCode,
+			event.DurationMs,
+			labels,
+			doraType,
+			event.Environment,
+			string(payload),
+			outcome,
+			event.CommitSHAs,
+		)
+	}
 
 	duration := time.Since(start).Milliseconds()
 
@@ -271,17 +340,22 @@ func encodeMetadata(m map[string]string) string {
 	if m == nil {
 		return "{}"
 	}
-	result := "{"
-	first := true
-	for k, v := range m {
-		if !first {
-			result += ","
-		}
-		result += "\"" + k + "\":\"" + v + "\""
-		first = false
+	b, err := json.Marshal(m)
+	if err != nil {
+		return "{}"
 	}
-	result += "}"
-	return result
+	return string(b)
+}
+
+func doraEventTypeFromJobEvent(eventType string) string {
+	switch eventType {
+	case "job_completed":
+		return "deployment.succeeded"
+	case "job_failed":
+		return "deployment.failed"
+	default:
+		return ""
+	}
 }
 
 // GetQueueLength returns the current queue length.

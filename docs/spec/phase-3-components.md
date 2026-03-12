@@ -98,6 +98,7 @@ type Config struct {
     DatabaseURL string
     OIDCIssuerURL string
     OIDCAudience string
+    DoraPrometheusEnabled bool
 }
 ```
 
@@ -622,6 +623,15 @@ type Server interface {
     Start(ctx context.Context) error
     Shutdown(ctx context.Context) error
 }
+
+// Phase 1 DORA routes registered by HTTPServer
+// GET /v1/dora/summary
+// GET /v1/dora/group/summary
+// GET /v1/dora/deployments
+// POST /v1/webhooks/dora/:provider
+// GET /v1/internal/dora/dead-letter
+// GET /v1/internal/dora/dead-letter/:id
+// POST /v1/internal/dora/dead-letter/:id/replay
 ```
 
 ##### Example — HTTPServer
@@ -3777,6 +3787,16 @@ type Exporter interface {
 3. Expose metrics endpoint through HTTP server.
 4. Provide in-process recording helpers consumed by `ApprovalService` and `ApprovalWorker`.
 5. Ensure bounded label cardinality for tenant and component labels.
+6. Register DORA counters and histograms:
+   - `release_engine_dora_deployments_total{tenant_id,service_ref,environment,status}`
+   - `release_engine_dora_lead_time_seconds{tenant_id,service_ref}`
+   - `release_engine_dora_cfr_percent{tenant_id,service_ref,window_days}`
+   - `release_engine_dora_mttr_seconds{tenant_id,service_ref,window_days}`
+   - `release_engine_dora_dead_letter_total{tenant_id,provider,error_code}`
+7. Register aggregate DORA gauges that remain enabled even when tenant-level DORA metrics are disabled:
+   - `release_engine_dora_tenants_above_cfr_threshold_total{window,threshold}`
+   - `release_engine_dora_tenants_with_no_dora_data_total{metric}`
+8. Support dedicated DORA Prometheus registry controlled by `DORA_PROMETHEUS_ENABLED`.
 
 ---
 
@@ -3848,6 +3868,15 @@ Approval-specific telemetry emitted through this component:
 - `re_approval_escalations_total`
 - `re_approval_timeouts_total`
 - `re_approval_worker_tick_duration_seconds`
+
+DORA-specific telemetry emitted through this component:
+- `release_engine_dora_deployments_total`
+- `release_engine_dora_lead_time_seconds`
+- `release_engine_dora_cfr_percent`
+- `release_engine_dora_mttr_seconds`
+- `release_engine_dora_dead_letter_total`
+- `release_engine_dora_tenants_above_cfr_threshold_total`
+- `release_engine_dora_tenants_with_no_dora_data_total`
 
 ---
 
@@ -3957,6 +3986,8 @@ type MetricsWriter interface {
 1. Map runtime events to metrics_sql row schema.
 2. Insert events asynchronously with bounded worker pool.
 3. Drop or backpressure according to configured queue limits to avoid unbounded memory growth.
+4. Phase-1 DORA bridge: on internal deployment outcome events, write `metrics_job_events`, `dora_events`, and `dora_commit_deployment_links` atomically in one SQL unit.
+5. Ignore nil/empty `commit_shas` during link row population; writes remain idempotent.
 
 ---
 

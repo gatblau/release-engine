@@ -31,6 +31,8 @@ type AuthClaims struct {
 	Subject   string `json:"sub"`
 	TenantID  string `json:"tenant_id"`
 	Role      string `json:"role"`
+	BrandIDs  []string
+	GroupIDs  []string
 	Issuer    string `json:"iss"`
 	Audience  string `json:"aud"`
 	ExpiresAt int64  `json:"exp"`
@@ -408,13 +410,15 @@ func (m *authMiddleware) Process(next echo.HandlerFunc) echo.HandlerFunc {
 
 		// Step 5: Extract and inject claims into context
 		authClaims := AuthClaims{
-			Subject:   (*claims)["sub"].(string),
-			TenantID:  (*claims)["tenant_id"].(string),
+			Subject:   claimAsString(*claims, "sub"),
+			TenantID:  claimAsString(*claims, "tenant_id"),
 			Role:      claimAsString(*claims, "role"),
-			Issuer:    (*claims)["iss"].(string),
-			Audience:  (*claims)["aud"].(string),
-			ExpiresAt: int64((*claims)["exp"].(float64)),
-			IssuedAt:  int64((*claims)["iat"].(float64)),
+			BrandIDs:  claimAsStringSlice(*claims, "brand_ids"),
+			GroupIDs:  claimAsStringSlice(*claims, "group_ids"),
+			Issuer:    claimAsString(*claims, "iss"),
+			Audience:  claimAsString(*claims, "aud"),
+			ExpiresAt: claimAsInt64(*claims, "exp"),
+			IssuedAt:  claimAsInt64(*claims, "iat"),
 		}
 
 		// Set in echo context
@@ -514,4 +518,42 @@ func claimAsString(claims jwt.MapClaims, key string) string {
 		return ""
 	}
 	return stringValue
+}
+
+func claimAsStringSlice(claims jwt.MapClaims, key string) []string {
+	value, ok := claims[key]
+	if !ok {
+		return nil
+	}
+	items, ok := value.([]any)
+	if !ok {
+		if values, ok := value.([]string); ok {
+			return values
+		}
+		return nil
+	}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		if s, ok := item.(string); ok && s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func claimAsInt64(claims jwt.MapClaims, key string) int64 {
+	value, ok := claims[key]
+	if !ok {
+		return 0
+	}
+	switch v := value.(type) {
+	case float64:
+		return int64(v)
+	case int64:
+		return v
+	case int:
+		return int64(v)
+	default:
+		return 0
+	}
 }

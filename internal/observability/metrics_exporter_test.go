@@ -318,3 +318,42 @@ func TestMetricsExporter_RegisterRoutes_ActuallyWorks(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.NotEmpty(t, rec.Body.String())
 }
+
+func TestMetricsExporter_DoraPrometheusDisabledStillExposesAggregateMetrics(t *testing.T) {
+	logger, _ := zap.NewDevelopment()
+	exporter := NewMetricsExporter(logger, 8080, WithDoraPrometheusEnabled(false))
+	require.NoError(t, exporter.RegisterCollectors())
+
+	exporter.RecordDoraLeadTime("t-1", "svc-a", 120)
+	exporter.RecordDoraDeadLetter("t-1", "github", "normalizer_error")
+	exporter.RecordDoraTenantsAboveCFRThreshold(30, 15.0, 2)
+	exporter.RecordDoraTenantsWithNoDoraData("lead_time", 3)
+
+	metrics, err := exporter.registry.Gather()
+	require.NoError(t, err)
+	metricNames := make(map[string]bool)
+	for _, m := range metrics {
+		metricNames[m.GetName()] = true
+	}
+
+	assert.True(t, metricNames["release_engine_dora_tenants_above_cfr_threshold_total"])
+	assert.True(t, metricNames["release_engine_dora_tenants_with_no_dora_data_total"])
+
+	doraMetrics, err := exporter.doraRegistry.Gather()
+	require.NoError(t, err)
+	assert.Len(t, doraMetrics, 0)
+}
+
+func TestMetricsExporter_RecordDoraAggregateMetrics(t *testing.T) {
+	logger, _ := zap.NewDevelopment()
+	exporter := NewMetricsExporter(logger, 8080)
+	require.NoError(t, exporter.RegisterCollectors())
+
+	exporter.RecordDoraTenantsAboveCFRThreshold(7, 10.0, 5)
+	exporter.RecordDoraTenantsWithNoDoraData("mttr", 4)
+
+	above := testutil.ToFloat64(exporter.doraTenantsAboveCFRTotal.WithLabelValues("7", "10"))
+	noData := testutil.ToFloat64(exporter.doraTenantsWithNoDataTotal.WithLabelValues("mttr"))
+	assert.Equal(t, 5.0, above)
+	assert.Equal(t, 4.0, noData)
+}

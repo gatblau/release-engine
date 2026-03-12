@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 gatblau
+
 package db
 
 // Schema contains SQL statements for creating the database schema.
@@ -335,6 +338,160 @@ CREATE TABLE IF NOT EXISTS metrics_job_events (
 	labels jsonb DEFAULT '{}'::jsonb
 );`
 
+	// SchemaDoraEvents creates the dora_events table.
+	// Based on design spec d10.md §44.
+	SchemaDoraEvents = `
+CREATE TABLE IF NOT EXISTS dora_events (
+	id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+	tenant_id text NOT NULL,
+	event_type text NOT NULL,
+	event_source text NOT NULL,
+	service_ref text,
+	environment text,
+	correlation_key text,
+	source_event_id text,
+	event_timestamp timestamptz NOT NULL,
+	ingested_at timestamptz NOT NULL DEFAULT now(),
+	payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+	CONSTRAINT dora_events_type_check CHECK (
+		event_type IN (
+			'deployment.succeeded',
+			'deployment.failed',
+			'commit.pushed',
+			'commit.merged',
+			'incident.opened',
+			'incident.resolved',
+			'rollback.completed'
+		)
+	)
+);`
+
+	SchemaDoraEventsTenantServiceIdx = `
+CREATE INDEX IF NOT EXISTS idx_dora_events_tenant_service
+ON dora_events (tenant_id, service_ref, event_timestamp DESC);`
+
+	SchemaDoraEventsCorrelationIdx = `
+CREATE INDEX IF NOT EXISTS idx_dora_events_correlation
+ON dora_events (tenant_id, correlation_key)
+WHERE correlation_key IS NOT NULL;`
+
+	SchemaDoraEventsSourceEventUidx = `
+CREATE UNIQUE INDEX IF NOT EXISTS uq_dora_events_source_event
+ON dora_events (tenant_id, event_source, source_event_id)
+WHERE source_event_id IS NOT NULL;`
+
+	SchemaDoraEventsDeployDedupeUidx = `
+CREATE UNIQUE INDEX IF NOT EXISTS uq_dora_events_deploy_dedupe
+ON dora_events (tenant_id, service_ref, environment, event_type, correlation_key)
+WHERE correlation_key IS NOT NULL
+AND event_type IN ('deployment.succeeded', 'deployment.failed');`
+
+	// SchemaDoraCommitDeploymentLinks creates the commit-deployment links table.
+	SchemaDoraCommitDeploymentLinks = `
+CREATE TABLE IF NOT EXISTS dora_commit_deployment_links (
+	tenant_id text NOT NULL,
+	service_ref text NOT NULL,
+	commit_sha text NOT NULL,
+	deployment_id uuid NOT NULL,
+	deployment_outcome text NOT NULL,
+	deployment_time timestamptz NOT NULL,
+	created_at timestamptz NOT NULL DEFAULT now(),
+	CONSTRAINT chk_dora_links_outcome CHECK (deployment_outcome IN ('succeeded', 'failed')),
+	CONSTRAINT fk_dora_links_deployment FOREIGN KEY (deployment_id) REFERENCES dora_events(id) ON DELETE CASCADE,
+	PRIMARY KEY (tenant_id, service_ref, commit_sha, deployment_id)
+);`
+
+	SchemaDoraCommitDeploymentLinksDeploymentTimeIdx = `
+CREATE INDEX IF NOT EXISTS idx_dora_links_deployment_time
+ON dora_commit_deployment_links (tenant_id, service_ref, deployment_time DESC, deployment_outcome);`
+
+	SchemaDoraDeploymentFrequencyDailyMV = `
+CREATE MATERIALIZED VIEW IF NOT EXISTS dora_deployment_frequency_daily AS
+SELECT
+	tenant_id,
+	service_ref,
+	environment,
+	date_trunc('day', event_timestamp) AS bucket,
+	count(*) FILTER (WHERE event_type = 'deployment.succeeded') AS success_count,
+	count(*) FILTER (WHERE event_type = 'deployment.failed') AS failure_count
+FROM dora_events
+WHERE event_type IN ('deployment.succeeded', 'deployment.failed')
+GROUP BY tenant_id, service_ref, environment, bucket;`
+
+	SchemaDoraDeploymentFrequencyDailyMVKeyIdx = `
+CREATE UNIQUE INDEX IF NOT EXISTS idx_dora_deploy_freq_daily_key
+ON dora_deployment_frequency_daily (tenant_id, service_ref, environment, bucket);`
+
+	SchemaDoraIncidentOpenedDailyMV = `
+CREATE MATERIALIZED VIEW IF NOT EXISTS dora_incident_opened_daily AS
+SELECT
+	tenant_id,
+	service_ref,
+	date_trunc('day', event_timestamp) AS bucket,
+	count(*) AS opened_incident_count
+FROM dora_events
+WHERE event_type = 'incident.opened'
+GROUP BY tenant_id, service_ref, bucket;`
+
+	SchemaDoraIncidentOpenedDailyMVKeyIdx = `
+CREATE UNIQUE INDEX IF NOT EXISTS idx_dora_incident_opened_daily_key
+ON dora_incident_opened_daily (tenant_id, service_ref, bucket);`
+
+	SchemaDoraIncidentsDailyMV = `
+CREATE MATERIALIZED VIEW IF NOT EXISTS dora_incidents_daily AS
+SELECT
+	o.tenant_id,
+	o.service_ref,
+	date_trunc('day', o.event_timestamp) AS bucket,
+	count(*) AS resolved_incident_count,
+	avg(EXTRACT(EPOCH FROM (r.event_timestamp - o.event_timestamp))) AS avg_restore_seconds,
+	percentile_cont(0.5) WITHIN GROUP (
+		ORDER BY EXTRACT(EPOCH FROM (r.event_timestamp - o.event_timestamp))
+	) AS p50_restore_seconds
+FROM dora_events o
+JOIN dora_events r
+	ON  r.tenant_id = o.tenant_id
+	AND r.correlation_key = o.correlation_key
+	AND r.event_type = 'incident.resolved'
+WHERE o.event_type = 'incident.opened'
+GROUP BY o.tenant_id, o.service_ref, bucket;`
+
+	SchemaDoraIncidentsDailyMVKeyIdx = `
+CREATE UNIQUE INDEX IF NOT EXISTS idx_dora_incidents_daily_key
+ON dora_incidents_daily (tenant_id, service_ref, bucket);`
+
+	SchemaDoraWebhookDeadLetter = `
+CREATE TABLE IF NOT EXISTS dora_webhook_dead_letter (
+	id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+	tenant_id text NOT NULL,
+	provider text NOT NULL,
+	source_event_id text,
+	headers jsonb NOT NULL,
+	body bytea NOT NULL,
+	failure_reason text NOT NULL,
+	created_at timestamptz NOT NULL DEFAULT now(),
+	replayed_at timestamptz,
+	replay_job_id uuid
+);`
+
+	SchemaDoraWebhookDeadLetterTenantCreatedIdx = `
+CREATE INDEX IF NOT EXISTS idx_dora_webhook_dlq_tenant_created
+ON dora_webhook_dead_letter (tenant_id, created_at DESC);`
+
+	SchemaDoraGroupBrandMap = `
+CREATE TABLE IF NOT EXISTS dora_group_brand_map (
+	group_id text NOT NULL,
+	brand_id text NOT NULL,
+	tenant_id text NOT NULL,
+	classification_version text NOT NULL DEFAULT 'dora-2023-default+gates-included',
+	last_synced_at timestamptz NOT NULL DEFAULT now(),
+	PRIMARY KEY (group_id, brand_id, tenant_id)
+);`
+
+	SchemaDoraGroupBrandMapGroupIdx = `
+CREATE INDEX IF NOT EXISTS idx_dora_group_brand_map_group
+ON dora_group_brand_map (tenant_id, group_id, last_synced_at DESC);`
+
 	// SchemaAuditLog creates the audit_log table.
 	// Used by AuditService
 	SchemaAuditLog = `
@@ -444,6 +601,13 @@ var SchemaAll = []string{
 	SchemaConnectorCallLog,
 	SchemaIdempotencyKeys,
 	SchemaMetricsJobEvents,
+	SchemaDoraEvents,
+	SchemaDoraCommitDeploymentLinks,
+	SchemaDoraWebhookDeadLetter,
+	SchemaDoraGroupBrandMap,
+	SchemaDoraDeploymentFrequencyDailyMV,
+	SchemaDoraIncidentOpenedDailyMV,
+	SchemaDoraIncidentsDailyMV,
 	SchemaAuditLog,
 	// Indexes
 	SchemaJobsIdemUidx,
@@ -462,6 +626,16 @@ var SchemaAll = []string{
 	SchemaConnectorCallLogCallIdIdx,
 	SchemaConnectorCallLogEffectIdIdx,
 	SchemaIdempotencyKeysExpiresAtIdx,
+	SchemaDoraEventsTenantServiceIdx,
+	SchemaDoraEventsCorrelationIdx,
+	SchemaDoraEventsSourceEventUidx,
+	SchemaDoraEventsDeployDedupeUidx,
+	SchemaDoraCommitDeploymentLinksDeploymentTimeIdx,
+	SchemaDoraWebhookDeadLetterTenantCreatedIdx,
+	SchemaDoraGroupBrandMapGroupIdx,
+	SchemaDoraDeploymentFrequencyDailyMVKeyIdx,
+	SchemaDoraIncidentOpenedDailyMVKeyIdx,
+	SchemaDoraIncidentsDailyMVKeyIdx,
 	// Helper functions
 	SchemaBackoffInterval,
 	SchemaEffectLease,

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 gatblau
+
 package http
 
 import (
@@ -47,6 +50,7 @@ func NewServer(port int, logger *zap.Logger) Server {
 
 func (s *server) RegisterRoutes() {
 	jobHandler := NewJobHandler()
+	doraHandler := NewDoraHandler(nil)
 
 	s.e.GET("/healthz", func(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
@@ -70,6 +74,16 @@ func (s *server) RegisterRoutes() {
 	api.POST("/jobs/:id/cancel", jobHandler.CancelJob)
 	api.POST("/jobs/:job_id/steps/:step_id/decisions", jobHandler.SubmitDecision)
 	api.GET("/jobs/:job_id/steps/:step_id/approval-context", jobHandler.GetApprovalContext)
+	api.GET("/dora/summary", doraHandler.GetSummary)
+	api.GET("/dora/group/summary", doraHandler.GetGroupSummary)
+	api.GET("/dora/deployments", doraHandler.GetDeployments)
+	api.GET("/internal/dora/dead-letter", doraHandler.ListDeadLetter)
+	api.GET("/internal/dora/dead-letter/:id", doraHandler.GetDeadLetter)
+	api.POST("/internal/dora/dead-letter/:id/replay", doraHandler.ReplayDeadLetter)
+
+	// Inbound provider webhooks use provider-native authentication and are not
+	// JWT-protected interactive API routes.
+	s.e.POST("/v1/webhooks/dora/:provider", doraHandler.IngestWebhook)
 }
 
 func (s *server) Start(ctx context.Context) error {

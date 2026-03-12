@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 gatblau
+
 package config
 
 import (
@@ -31,6 +34,7 @@ type Config struct {
 	DatabaseURL           string
 	OIDCIssuerURL         string
 	OIDCAudience          string
+	DoraPrometheusEnabled bool
 	VoltaEnvType          VoltaEnvType
 	VoltaStorage          VoltaStorageType
 	VoltaSMSecretID       string
@@ -97,6 +101,15 @@ func (l *loader) Load(ctx context.Context) (Config, error) {
 		return Config{}, &ConfigError{Err: ErrConfigInvalid, Code: "CONFIG_INVALID", Detail: map[string]string{"var": "HTTP_PORT"}}
 	}
 
+	doraPrometheusEnabled := true
+	if raw := os.Getenv("DORA_PROMETHEUS_ENABLED"); raw != "" {
+		parsed, err := strconv.ParseBool(raw)
+		if err != nil {
+			return Config{}, &ConfigError{Err: ErrConfigInvalid, Code: "CONFIG_INVALID", Detail: map[string]string{"var": "DORA_PROMETHEUS_ENABLED"}}
+		}
+		doraPrometheusEnabled = parsed
+	}
+
 	// Load Volta environment type (defaults to prod for security)
 	voltaEnv := VoltaEnvType(os.Getenv("VOLTA_ENV"))
 	if voltaEnv == "" {
@@ -123,6 +136,7 @@ func (l *loader) Load(ctx context.Context) (Config, error) {
 		DatabaseURL:           dbURL,
 		OIDCIssuerURL:         oidcIssuer,
 		OIDCAudience:          oidcAudience,
+		DoraPrometheusEnabled: doraPrometheusEnabled,
 		VoltaEnvType:          voltaEnv,
 		VoltaStorage:          voltaStorage,
 		VoltaSMSecretID:       voltaSMSecretID,

@@ -31,6 +31,10 @@ flowchart LR
     OUTBOX[Outbox Worker]
     OBS["Metrics and Tracing Exporters"]
     APPROVAL[Approval Service]
+    DORAAPI["DORA API Handler"]
+    DORABRIDGE["DORA Internal Event Bridge"]
+    DORAREG["DORA Normalizer Registry"]
+    GHNORM["GitHub Normalizer"]
   end
 
   subgraph Data["Data"]
@@ -56,7 +60,12 @@ flowchart LR
   API -->|in-process| PE
   API -->|in-process| IDEM
   API -->|in-process| APPROVAL
+  API -->|in-process| DORAAPI
+  API -->|provider dispatch| DORAREG
+  DORAREG -->|github| GHNORM
   API -->|PostgreSQL over TLS SCRAM via PgBouncer tx pool| PG
+
+  DORABRIDGE -->|atomic write metrics_job_events + dora_events + dora_commit_deployment_links| PG
 
   SCH -->|SELECT FOR UPDATE SKIP LOCKED with run_id fencing| PG
   SCH -->|in process dispatch with context run_id lease| RUN
@@ -104,6 +113,10 @@ flowchart LR
 | ReconcilerService | service | 2 | DBPool, ConnectorRegistry, MetricsService | high |
 | OutboxDispatcher | service | 2 | DBPool, CallbackSigner, MetricsService | high |
 | ApprovalService | service | 2 | DBPool, PolicyEngine, OutboxDispatcher | high |
+| DoraAPIHandler | transport | 1 | AuthMiddleware, RateLimiter, DBPool | medium |
+| DoraEventBridge (in MetricsSQLWriter) | observability | 1 | DBPool | medium |
+| DoraNormalizerRegistry | service | 2 | DoraAPIHandler | medium |
+| GitHubDoraNormalizer | service | 2 | DoraNormalizerRegistry | medium |
 | CallbackSigner (HMAC rotation) | pkg | 2 | ConfigLoader | medium |
 | MetricsExporter (Prometheus) | observability | 2 | HTTPServer | medium |
 | MetricsSQLWriter | observability | 2 | DBPool | medium |
@@ -146,7 +159,11 @@ type ApprovalRequest struct {
 
 ## 2D — Configuration & Environment Variables
 
-(Keep existing, add for ApprovalService if needed)
+| Variable | Default | Purpose |
+|---|---|---|
+| `DORA_GROUP_MAP_TTL` | `15m` | Maximum staleness tolerated for `dora_group_brand_map` during group-scoped reads. |
+| `DORA_LEAD_TIME_COVERAGE_THRESHOLD` | `0.8` | Minimum correlated deployment coverage required for Lead Time `data_quality=complete`. |
+| `DORA_CLASSIFICATION_VERSION` | `dora-2023-default+gates-included` | Default classification profile when request does not provide an override. |
 
 ## 2E — State Machine Extension
 

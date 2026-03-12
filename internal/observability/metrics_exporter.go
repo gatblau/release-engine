@@ -1,7 +1,11 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 gatblau
+
 package observability
 
 import (
 	"context"
+	"strconv"
 	"sync"
 	"time"
 
@@ -20,10 +24,13 @@ type Exporter interface {
 // MetricsExporter implements the Exporter interface for Prometheus metrics.
 type MetricsExporter struct {
 	registry                   *prometheus.Registry
+	doraRegistry               *prometheus.Registry
 	logger                     *zap.Logger
 	collectors                 map[string]prometheus.Collector
+	doraCollectors             map[string]prometheus.Collector
 	mu                         sync.RWMutex
 	httpPort                   int
+	doraPrometheusEnabled      bool
 	scrapeDuration             *prometheus.HistogramVec
 	totalRequests              *prometheus.CounterVec
 	approvalRequestsTotal      *prometheus.CounterVec
@@ -32,21 +39,40 @@ type MetricsExporter struct {
 	approvalEscalationsTotal   *prometheus.CounterVec
 	approvalTimeoutsTotal      *prometheus.CounterVec
 	approvalWorkerTickDuration *prometheus.HistogramVec
+	doraDeploymentsTotal       *prometheus.CounterVec
+	doraLeadTimeSeconds        *prometheus.HistogramVec
+	doraCFRPercent             *prometheus.GaugeVec
+	doraMTTRSeconds            *prometheus.GaugeVec
+	doraDeadLetterTotal        *prometheus.CounterVec
+	doraTenantsAboveCFRTotal   *prometheus.GaugeVec
+	doraTenantsWithNoDataTotal *prometheus.GaugeVec
+}
+
+type MetricsExporterOption func(*MetricsExporter)
+
+func WithDoraPrometheusEnabled(enabled bool) MetricsExporterOption {
+	return func(m *MetricsExporter) {
+		m.doraPrometheusEnabled = enabled
+	}
 }
 
 // NewMetricsExporter creates a new MetricsExporter.
-func NewMetricsExporter(logger *zap.Logger, httpPort int) *MetricsExporter {
+func NewMetricsExporter(logger *zap.Logger, httpPort int, opts ...MetricsExporterOption) *MetricsExporter {
 	registry := prometheus.NewRegistry()
+	doraRegistry := prometheus.NewRegistry()
 
 	// Create standard collectors
 	registry.MustRegister(collectors.NewGoCollector())
 	registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 
 	exporter := &MetricsExporter{
-		registry:   registry,
-		logger:     logger,
-		collectors: make(map[string]prometheus.Collector),
-		httpPort:   httpPort,
+		registry:              registry,
+		doraRegistry:          doraRegistry,
+		logger:                logger,
+		collectors:            make(map[string]prometheus.Collector),
+		doraCollectors:        make(map[string]prometheus.Collector),
+		httpPort:              httpPort,
+		doraPrometheusEnabled: true,
 		scrapeDuration: prometheus.NewHistogramVec(
 			prometheus.HistogramOpts{
 				Name:    "release_engine_metrics_scrape_duration_seconds",
@@ -62,6 +88,9 @@ func NewMetricsExporter(logger *zap.Logger, httpPort int) *MetricsExporter {
 			},
 			[]string{"status"},
 		),
+	}
+	for _, opt := range opts {
+		opt(exporter)
 	}
 
 	registry.MustRegister(exporter.scrapeDuration)
@@ -278,6 +307,94 @@ func (m *MetricsExporter) RegisterCollectors() error {
 		return err
 	}
 
+	m.doraDeploymentsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "release_engine_dora_deployments_total",
+			Help: "Total number of DORA deployment events written",
+		},
+		[]string{"tenant_id", "service_ref", "environment", "status"},
+	)
+	if m.doraPrometheusEnabled {
+		if err := m.registerDoraCollector("dora_deployments_total", m.doraDeploymentsTotal); err != nil {
+			return err
+		}
+	}
+
+	m.doraLeadTimeSeconds = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "release_engine_dora_lead_time_seconds",
+			Help:    "Lead time for changes in seconds for correlated commit to deployment pairs",
+			Buckets: []float64{60, 300, 900, 1800, 3600, 14400, 86400, 604800},
+		},
+		[]string{"tenant_id", "service_ref"},
+	)
+	if m.doraPrometheusEnabled {
+		if err := m.registerDoraCollector("dora_lead_time_seconds", m.doraLeadTimeSeconds); err != nil {
+			return err
+		}
+	}
+
+	m.doraCFRPercent = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "release_engine_dora_cfr_percent",
+			Help: "Most recently computed change failure rate percentage",
+		},
+		[]string{"tenant_id", "service_ref", "window_days"},
+	)
+	if m.doraPrometheusEnabled {
+		if err := m.registerDoraCollector("dora_cfr_percent", m.doraCFRPercent); err != nil {
+			return err
+		}
+	}
+
+	m.doraMTTRSeconds = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "release_engine_dora_mttr_seconds",
+			Help: "Most recently computed mean time to restore in seconds",
+		},
+		[]string{"tenant_id", "service_ref", "window_days"},
+	)
+	if m.doraPrometheusEnabled {
+		if err := m.registerDoraCollector("dora_mttr_seconds", m.doraMTTRSeconds); err != nil {
+			return err
+		}
+	}
+
+	m.doraDeadLetterTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "release_engine_dora_dead_letter_total",
+			Help: "Total number of DORA webhook dead-letter writes",
+		},
+		[]string{"tenant_id", "provider", "error_code"},
+	)
+	if m.doraPrometheusEnabled {
+		if err := m.registerDoraCollector("dora_dead_letter_total", m.doraDeadLetterTotal); err != nil {
+			return err
+		}
+	}
+
+	m.doraTenantsAboveCFRTotal = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "release_engine_dora_tenants_above_cfr_threshold_total",
+			Help: "Aggregate number of tenants above configured CFR threshold",
+		},
+		[]string{"window", "threshold"},
+	)
+	if err := m.registerCollector("dora_tenants_above_cfr_threshold_total", m.doraTenantsAboveCFRTotal); err != nil {
+		return err
+	}
+
+	m.doraTenantsWithNoDataTotal = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "release_engine_dora_tenants_with_no_dora_data_total",
+			Help: "Aggregate number of tenants with no DORA data by metric",
+		},
+		[]string{"metric"},
+	)
+	if err := m.registerCollector("dora_tenants_with_no_dora_data_total", m.doraTenantsWithNoDataTotal); err != nil {
+		return err
+	}
+
 	m.logger.Info("metricsexporter.start", zap.String("component", "MetricsExporter"))
 	m.logger.Info("metricsexporter.success", zap.String("component", "MetricsExporter"))
 
@@ -312,6 +429,33 @@ func (m *MetricsExporter) registerCollector(name string, collector prometheus.Co
 	return nil
 }
 
+func (m *MetricsExporter) registerDoraCollector(name string, collector prometheus.Collector) error {
+	if _, exists := m.doraCollectors[name]; exists {
+		m.logger.Error("metricsexporter.failure",
+			zap.String("component", "MetricsExporter"),
+			zap.String("error", "dora collector already registered"))
+		return NewObservabilityError(
+			ErrMetricsCollectorConflict,
+			"METRICS_COLLECTOR_CONFLICT",
+			map[string]string{"collector": name},
+		)
+	}
+
+	if err := m.doraRegistry.Register(collector); err != nil {
+		m.logger.Error("metricsexporter.failure",
+			zap.String("component", "MetricsExporter"),
+			zap.String("error", err.Error()))
+		return NewObservabilityError(
+			ErrMetricsCollectorConflict,
+			"METRICS_COLLECTOR_CONFLICT",
+			map[string]string{"collector": name, "error": err.Error()},
+		)
+	}
+
+	m.doraCollectors[name] = collector
+	return nil
+}
+
 // RegisterRoutes registers the metrics endpoint with the Echo server.
 // Implements Phase 3: MetricsExporter spec - expose metrics endpoint through HTTP.
 func (m *MetricsExporter) RegisterRoutes(e *echo.Echo) {
@@ -322,7 +466,7 @@ func (m *MetricsExporter) RegisterRoutes(e *echo.Echo) {
 func (m *MetricsExporter) handleMetrics(c echo.Context) error {
 	start := time.Now()
 
-	handler := promhttp.HandlerFor(m.registry, promhttp.HandlerOpts{})
+	handler := promhttp.HandlerFor(prometheus.Gatherers{m.registry, m.doraRegistry}, promhttp.HandlerOpts{})
 	handler.ServeHTTP(c.Response().Writer, c.Request())
 
 	duration := time.Since(start).Seconds()
@@ -396,4 +540,50 @@ func (m *MetricsExporter) RecordApprovalWorkerTick(status string, duration time.
 		return
 	}
 	m.approvalWorkerTickDuration.WithLabelValues(status).Observe(duration.Seconds())
+}
+
+// RecordDoraLeadTime observes lead time in seconds.
+func (m *MetricsExporter) RecordDoraLeadTime(tenantID, serviceRef string, leadTimeSeconds float64) {
+	if !m.doraPrometheusEnabled || m.doraLeadTimeSeconds == nil {
+		return
+	}
+	m.doraLeadTimeSeconds.WithLabelValues(tenantID, serviceRef).Observe(leadTimeSeconds)
+}
+
+// RecordDoraCFR sets the latest CFR percentage.
+func (m *MetricsExporter) RecordDoraCFR(tenantID, serviceRef string, windowDays int, percent float64) {
+	if !m.doraPrometheusEnabled || m.doraCFRPercent == nil {
+		return
+	}
+	m.doraCFRPercent.WithLabelValues(tenantID, serviceRef, strconv.Itoa(windowDays)).Set(percent)
+}
+
+// RecordDoraMTTR sets the latest MTTR in seconds.
+func (m *MetricsExporter) RecordDoraMTTR(tenantID, serviceRef string, windowDays int, seconds float64) {
+	if !m.doraPrometheusEnabled || m.doraMTTRSeconds == nil {
+		return
+	}
+	m.doraMTTRSeconds.WithLabelValues(tenantID, serviceRef, strconv.Itoa(windowDays)).Set(seconds)
+}
+
+// RecordDoraDeadLetter increments DORA dead-letter counter.
+func (m *MetricsExporter) RecordDoraDeadLetter(tenantID, provider, errorCode string) {
+	if !m.doraPrometheusEnabled || m.doraDeadLetterTotal == nil {
+		return
+	}
+	m.doraDeadLetterTotal.WithLabelValues(tenantID, provider, errorCode).Inc()
+}
+
+func (m *MetricsExporter) RecordDoraTenantsAboveCFRThreshold(windowDays int, threshold float64, total float64) {
+	if m.doraTenantsAboveCFRTotal == nil {
+		return
+	}
+	m.doraTenantsAboveCFRTotal.WithLabelValues(strconv.Itoa(windowDays), strconv.FormatFloat(threshold, 'f', -1, 64)).Set(total)
+}
+
+func (m *MetricsExporter) RecordDoraTenantsWithNoDoraData(metric string, total float64) {
+	if m.doraTenantsWithNoDataTotal == nil {
+		return
+	}
+	m.doraTenantsWithNoDataTotal.WithLabelValues(metric).Set(total)
 }
