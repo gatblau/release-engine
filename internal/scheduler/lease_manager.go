@@ -32,8 +32,8 @@ func (l *leaseManager) AcquireJobLease(ctx context.Context, jobID, ownerID strin
 	defer conn.Release()
 
 	runID := uuid.New().String()
-	// SQL: Update jobs set run_id=$1, lease_expires_at=now()+$2 where job_id=$3 and (lease_expires_at is null or lease_expires_at < now())
-	tag, err := conn.Exec(ctx, "UPDATE jobs SET run_id=$1, owner_id=$2, lease_expires_at=now() + $3::interval WHERE job_id=$4 AND (lease_expires_at IS NULL OR lease_expires_at < NOW())",
+	// SQL: Update jobs set run_id=$1, lease_expires_at=now()+$2 where id=$3 and (lease_expires_at is null or lease_expires_at < now())
+	tag, err := conn.Exec(ctx, "UPDATE jobs SET run_id=$1::uuid, owner_id=$2, lease_expires_at=now() + $3::interval, state='running', updated_at=now() WHERE id=$4::uuid AND (lease_expires_at IS NULL OR lease_expires_at < NOW())",
 		runID, ownerID, fmt.Sprintf("%d seconds", int(ttl.Seconds())), jobID)
 	if err != nil {
 		return "", false, err
@@ -53,8 +53,8 @@ func (l *leaseManager) FinaliseWithFence(ctx context.Context, jobID, runID, stat
 	}
 	defer conn.Release()
 
-	// SQL: Update jobs set state=$1, lease_expires_at=null where job_id=$2 and run_id=$3
-	tag, err := conn.Exec(ctx, "UPDATE jobs SET state=$1, lease_expires_at=NULL WHERE job_id=$2 AND run_id=$3", state, jobID, runID)
+	// SQL: Update jobs set state=$1, lease_expires_at=null where id=$2 and run_id=$3
+	tag, err := conn.Exec(ctx, "UPDATE jobs SET state=$1, lease_expires_at=NULL, owner_id=NULL, updated_at=now() WHERE id=$2::uuid AND run_id=$3::uuid", state, jobID, runID)
 	if err != nil {
 		return 0, err
 	}

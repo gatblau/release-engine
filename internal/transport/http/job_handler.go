@@ -3,20 +3,32 @@ package http
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
+	"net"
 	"net/http"
+	"net/url"
+	"regexp"
 	"strings"
+	"sync"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 )
 
 type JobHandler struct {
 	approvalService *ApprovalService
+	mu              sync.Mutex
+	idem            map[string]createJobRecord
 }
 
 func NewJobHandler() *JobHandler {
 	return &JobHandler{
 		approvalService: NewApprovalService(NewPolicyEngine()),
+		idem:            make(map[string]createJobRecord),
 	}
 }
 
@@ -24,11 +36,177 @@ func NewJobHandlerWithApprovalService(approvalService *ApprovalService) *JobHand
 	if approvalService == nil {
 		approvalService = NewApprovalService(NewPolicyEngine())
 	}
-	return &JobHandler{approvalService: approvalService}
+	return &JobHandler{approvalService: approvalService, idem: make(map[string]createJobRecord)}
 }
 
+type createJobRequest struct {
+	TenantID       string                 `json:"tenant_id"`
+	PathKey        string                 `json:"path_key"`
+	Params         map[string]any         `json:"params"`
+	IdempotencyKey string                 `json:"idempotency_key"`
+	CallbackURL    string                 `json:"callback_url,omitempty"`
+	MaxAttempts    int                    `json:"max_attempts,omitempty"`
+	FirstRunAt     *time.Time             `json:"first_run_at,omitempty"`
+	Schedule       string                 `json:"schedule,omitempty"`
+	Raw            map[string]interface{} `json:"-"`
+}
+
+type createJobEnvelope struct {
+	JobID       string     `json:"job_id"`
+	TenantID    string     `json:"tenant_id"`
+	PathKey     string     `json:"path_key"`
+	State       string     `json:"state"`
+	Attempt     int        `json:"attempt"`
+	MaxAttempts int        `json:"max_attempts"`
+	NextRunAt   *time.Time `json:"next_run_at"`
+	AcceptedAt  time.Time  `json:"accepted_at"`
+}
+
+type createJobRecord struct {
+	fingerprint string
+	statusCode  int
+	envelope    createJobEnvelope
+}
+
+const maxCreateJobBodyBytes = 256 * 1024
+
+var idemKeyRegex = regexp.MustCompile(`^[a-zA-Z0-9\-_.]+$`)
+
 func (h *JobHandler) CreateJob(c echo.Context) error {
-	return c.JSON(http.StatusAccepted, map[string]string{"message": "job accepted"})
+	body, err := io.ReadAll(io.LimitReader(c.Request().Body, maxCreateJobBodyBytes+1))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, ErrorResponse{Error: "invalid request body", Code: "INVALID_REQUEST"})
+	}
+	if len(body) > maxCreateJobBodyBytes {
+		return c.JSON(http.StatusRequestEntityTooLarge, map[string]string{"error_code": "ERR_PAYLOAD_TOO_LARGE"})
+	}
+
+	var req createJobRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		return c.JSON(http.StatusBadRequest, ErrorResponse{Error: "invalid request body", Code: "INVALID_REQUEST"})
+	}
+
+	if strings.TrimSpace(req.TenantID) == "" || strings.TrimSpace(req.PathKey) == "" {
+		return c.JSON(http.StatusBadRequest, ErrorResponse{Error: "tenant_id and path_key are required", Code: "INVALID_REQUEST"})
+	}
+	if !validIdempotencyKey(req.IdempotencyKey) {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error_code": "ERR_INVALID_IDEMPOTENCY_KEY"})
+	}
+	if req.CallbackURL != "" {
+		if err := validateCallbackURL(req.CallbackURL); err != nil {
+			return c.JSON(http.StatusBadRequest, map[string]string{"error_code": "ERR_INVALID_CALLBACK_URL"})
+		}
+	}
+
+	if req.MaxAttempts < 1 {
+		req.MaxAttempts = 3
+	}
+	nextRunAt := time.Now().UTC()
+	if req.FirstRunAt != nil {
+		nextRunAt = req.FirstRunAt.UTC()
+	}
+
+	fingerprint, err := createJobFingerprint(req)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, ErrorResponse{Error: "invalid request", Code: "INVALID_REQUEST"})
+	}
+
+	idemKey := fmt.Sprintf("%s|%s|%s", req.TenantID, req.PathKey, req.IdempotencyKey)
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if rec, ok := h.idem[idemKey]; ok {
+		c.Response().Header().Set("Idempotency-Key", req.IdempotencyKey)
+		if rec.fingerprint == fingerprint {
+			c.Response().Header().Set("Idempotency-Replayed", "true")
+			c.Response().Header().Set("Location", "/v1/jobs/"+rec.envelope.JobID)
+			return c.JSON(rec.statusCode, rec.envelope)
+		}
+		return c.JSON(http.StatusConflict, map[string]any{
+			"error_code": "ERR_IDEM_CONFLICT",
+			"conflict":   true,
+			"canonical":  rec.envelope,
+			"message":    "idempotency key reused with different payload",
+		})
+	}
+
+	env := createJobEnvelope{
+		JobID:       uuid.NewString(),
+		TenantID:    req.TenantID,
+		PathKey:     req.PathKey,
+		State:       "queued",
+		Attempt:     0,
+		MaxAttempts: req.MaxAttempts,
+		NextRunAt:   &nextRunAt,
+		AcceptedAt:  time.Now().UTC(),
+	}
+
+	h.idem[idemKey] = createJobRecord{fingerprint: fingerprint, statusCode: http.StatusAccepted, envelope: env}
+
+	c.Response().Header().Set("Idempotency-Key", req.IdempotencyKey)
+	c.Response().Header().Set("Idempotency-Replayed", "false")
+	c.Response().Header().Set("Location", "/v1/jobs/"+env.JobID)
+	return c.JSON(http.StatusAccepted, env)
+}
+
+func validIdempotencyKey(key string) bool {
+	if len(key) == 0 || len(key) > 128 {
+		return false
+	}
+	return idemKeyRegex.MatchString(key)
+}
+
+func createJobFingerprint(req createJobRequest) (string, error) {
+	payload := map[string]any{
+		"path_key": req.PathKey,
+		"params":   req.Params,
+	}
+	if req.CallbackURL != "" {
+		payload["callback_url"] = req.CallbackURL
+	}
+	if req.Schedule != "" {
+		payload["schedule"] = req.Schedule
+	}
+	if req.FirstRunAt != nil {
+		payload["first_run_at"] = req.FirstRunAt.UTC().Format(time.RFC3339Nano)
+	}
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func validateCallbackURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return errors.New("invalid callback url")
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return errors.New("invalid callback url scheme")
+	}
+	host := u.Hostname()
+	if host == "localhost" {
+		return errors.New("localhost is not allowed")
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return nil
+	}
+	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+		return errors.New("private callback ip is not allowed")
+	}
+	if ip4 := ip.To4(); ip4 != nil {
+		if ip4[0] == 10 ||
+			(ip4[0] == 172 && ip4[1] >= 16 && ip4[1] <= 31) ||
+			(ip4[0] == 192 && ip4[1] == 168) ||
+			(ip4[0] == 169 && ip4[1] == 254) {
+			return errors.New("private callback ip is not allowed")
+		}
+	}
+	return nil
 }
 
 func (h *JobHandler) GetJob(c echo.Context) error {

@@ -30,7 +30,9 @@ func TestAuthMiddleware_MissingTokenAPI(t *testing.T) {
 
 func TestJobHandler_CreateJob(t *testing.T) {
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodPost, "/v1/jobs", nil)
+	body := bytes.NewBufferString(`{"tenant_id":"acme-prod","path_key":"deploy-production","params":{"version":"1.2.3"},"idempotency_key":"idem-1"}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/jobs", body)
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
@@ -39,6 +41,109 @@ func TestJobHandler_CreateJob(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Equal(t, http.StatusAccepted, rec.Code)
+	assert.Equal(t, "idem-1", rec.Header().Get("Idempotency-Key"))
+	assert.Equal(t, "false", rec.Header().Get("Idempotency-Replayed"))
+	assert.Contains(t, rec.Header().Get("Location"), "/v1/jobs/")
+	assert.Contains(t, rec.Body.String(), `"state":"queued"`)
+}
+
+func TestJobHandler_CreateJob_IdempotentReplay(t *testing.T) {
+	e := echo.New()
+	h := NewJobHandler()
+	body := `{"tenant_id":"acme-prod","path_key":"deploy-production","params":{"version":"1.2.3"},"idempotency_key":"idem-r1"}`
+
+	req1 := httptest.NewRequest(http.MethodPost, "/v1/jobs", bytes.NewBufferString(body))
+	req1.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec1 := httptest.NewRecorder()
+	c1 := e.NewContext(req1, rec1)
+	err := h.CreateJob(c1)
+	assert.NoError(t, err)
+	assert.Equal(t, http.StatusAccepted, rec1.Code)
+
+	req2 := httptest.NewRequest(http.MethodPost, "/v1/jobs", bytes.NewBufferString(body))
+	req2.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec2 := httptest.NewRecorder()
+	c2 := e.NewContext(req2, rec2)
+	err = h.CreateJob(c2)
+	assert.NoError(t, err)
+	assert.Equal(t, http.StatusAccepted, rec2.Code)
+	assert.Equal(t, "true", rec2.Header().Get("Idempotency-Replayed"))
+	assert.Equal(t, rec1.Body.String(), rec2.Body.String())
+}
+
+func TestJobHandler_CreateJob_IdempotencyConflict(t *testing.T) {
+	e := echo.New()
+	h := NewJobHandler()
+
+	body1 := `{"tenant_id":"acme-prod","path_key":"deploy-production","params":{"version":"1.2.3"},"idempotency_key":"idem-c1"}`
+	req1 := httptest.NewRequest(http.MethodPost, "/v1/jobs", bytes.NewBufferString(body1))
+	req1.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec1 := httptest.NewRecorder()
+	c1 := e.NewContext(req1, rec1)
+	err := h.CreateJob(c1)
+	assert.NoError(t, err)
+	assert.Equal(t, http.StatusAccepted, rec1.Code)
+
+	body2 := `{"tenant_id":"acme-prod","path_key":"deploy-production","params":{"version":"2.0.0"},"idempotency_key":"idem-c1"}`
+	req2 := httptest.NewRequest(http.MethodPost, "/v1/jobs", bytes.NewBufferString(body2))
+	req2.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec2 := httptest.NewRecorder()
+	c2 := e.NewContext(req2, rec2)
+	err = h.CreateJob(c2)
+	assert.NoError(t, err)
+	assert.Equal(t, http.StatusConflict, rec2.Code)
+	assert.Contains(t, rec2.Body.String(), "ERR_IDEM_CONFLICT")
+}
+
+func TestJobHandler_CreateJob_InvalidIdempotencyKey(t *testing.T) {
+	e := echo.New()
+	body := bytes.NewBufferString(`{"tenant_id":"acme-prod","path_key":"deploy-production","params":{},"idempotency_key":"invalid key"}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/jobs", body)
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	h := NewJobHandler()
+	err := h.CreateJob(c)
+
+	assert.NoError(t, err)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), "ERR_INVALID_IDEMPOTENCY_KEY")
+}
+
+func TestJobHandler_CreateJob_InvalidCallbackURL(t *testing.T) {
+	e := echo.New()
+	body := bytes.NewBufferString(`{"tenant_id":"acme-prod","path_key":"deploy-production","params":{},"idempotency_key":"idem-cb-1","callback_url":"http://127.0.0.1/hook"}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/jobs", body)
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	h := NewJobHandler()
+	err := h.CreateJob(c)
+
+	assert.NoError(t, err)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), "ERR_INVALID_CALLBACK_URL")
+}
+
+func TestJobHandler_CreateJob_PayloadTooLarge(t *testing.T) {
+	e := echo.New()
+	large := make([]byte, 256*1024+1)
+	for i := range large {
+		large[i] = 'a'
+	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/jobs", bytes.NewBuffer(large))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	h := NewJobHandler()
+	err := h.CreateJob(c)
+
+	assert.NoError(t, err)
+	assert.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
+	assert.Contains(t, rec.Body.String(), "ERR_PAYLOAD_TOO_LARGE")
 }
 
 func TestJobHandler_GetJob(t *testing.T) {

@@ -15,9 +15,10 @@ type RunnerService interface {
 }
 
 type runnerService struct {
-	pool     db.Pool
-	stepAPI  StepAPI
-	registry registry.ModuleRegistry
+	pool       db.Pool
+	stepAPI    StepAPI
+	registry   registry.ModuleRegistry
+	stepAPIFac func(jobID, runID string, attempt int) StepAPI
 }
 
 func NewRunnerService(pool db.Pool, stepAPI StepAPI, registry registry.ModuleRegistry) RunnerService {
@@ -25,6 +26,9 @@ func NewRunnerService(pool db.Pool, stepAPI StepAPI, registry registry.ModuleReg
 		pool:     pool,
 		stepAPI:  stepAPI,
 		registry: registry,
+		stepAPIFac: func(jobID, runID string, attempt int) StepAPI {
+			return NewStepAPIAdapter(pool, jobID, runID, attempt)
+		},
 	}
 }
 
@@ -38,7 +42,8 @@ func (s *runnerService) RunJob(ctx context.Context, jobID string, runID string) 
 	// 1. Fetch job definition
 	var pathKey, version string
 	var paramsRaw []byte
-	err = conn.QueryRow(ctx, "SELECT path_key, params_json->>'version', params_json FROM jobs WHERE id = $1 AND run_id = $2", jobID, runID).Scan(&pathKey, &version, &paramsRaw)
+	var attempt int
+	err = conn.QueryRow(ctx, "SELECT path_key, COALESCE(params_json->>'version', 'latest'), params_json, attempt FROM jobs WHERE id = $1::uuid AND run_id = $2::uuid AND state = 'running'", jobID, runID).Scan(&pathKey, &version, &paramsRaw, &attempt)
 	if err != nil {
 		return fmt.Errorf("failed to fetch job: %w", err)
 	}
@@ -59,11 +64,129 @@ func (s *runnerService) RunJob(ctx context.Context, jobID string, runID string) 
 		return fmt.Errorf("module %s:%s not found", pathKey, version)
 	}
 
+	stepAPI := s.stepAPI
+	if stepAPI == nil && s.stepAPIFac != nil {
+		stepAPI = s.stepAPIFac(jobID, runID, attempt)
+	}
+
 	// 3. Execute module workflow (modules orchestrate via StepAPI).
-	if err := module.Execute(ctx, s.stepAPI, params); err != nil {
+	if err := module.Execute(ctx, stepAPI, params); err != nil {
+		_ = s.finaliseFailure(ctx, jobID, runID, "RUNNER_EXEC_FAILED", err.Error())
 		return fmt.Errorf("module execution failed for %s:%s: %w", pathKey, version, err)
 	}
 
+	if err := s.finaliseSuccess(ctx, jobID, runID); err != nil {
+		return err
+	}
+
 	fmt.Printf("Job %s run %s processed successfully\n", jobID, runID)
+	return nil
+}
+
+func (s *runnerService) finaliseSuccess(ctx context.Context, jobID, runID string) error {
+	conn, err := s.pool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to acquire db connection: %w", err)
+	}
+	defer conn.Release()
+
+	tag, err := conn.Exec(ctx, `
+		UPDATE jobs
+		SET state = 'succeeded',
+			owner_id = NULL,
+			lease_expires_at = NULL,
+			next_run_at = NULL,
+			last_error_code = NULL,
+			last_error_message = NULL,
+			finished_at = now(),
+			updated_at = now()
+		WHERE id = $1::uuid AND run_id = $2::uuid AND state = 'running'`, jobID, runID)
+	if err != nil {
+		return fmt.Errorf("failed to finalise success: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("fenced conflict while finalising success")
+	}
+
+	_, _ = conn.Exec(ctx, `
+		INSERT INTO jobs_read AS r (id, tenant_id, path_key, state, attempt, max_attempts, owner_id, run_id,
+			lease_expires_at, next_run_at, accepted_at, last_error_code, last_error_message, started_at, finished_at, created_at, updated_at)
+		SELECT id, tenant_id, path_key, state, attempt, max_attempts, owner_id, run_id,
+			lease_expires_at, next_run_at, accepted_at, last_error_code, last_error_message, started_at, finished_at, created_at, updated_at
+		FROM jobs WHERE id = $1::uuid
+		ON CONFLICT (id) DO UPDATE
+		SET state = EXCLUDED.state,
+			attempt = EXCLUDED.attempt,
+			max_attempts = EXCLUDED.max_attempts,
+			owner_id = EXCLUDED.owner_id,
+			run_id = EXCLUDED.run_id,
+			lease_expires_at = EXCLUDED.lease_expires_at,
+			next_run_at = EXCLUDED.next_run_at,
+			accepted_at = EXCLUDED.accepted_at,
+			last_error_code = EXCLUDED.last_error_code,
+			last_error_message = EXCLUDED.last_error_message,
+			started_at = EXCLUDED.started_at,
+			finished_at = EXCLUDED.finished_at,
+			created_at = EXCLUDED.created_at,
+			updated_at = EXCLUDED.updated_at`, jobID)
+
+	_, _ = conn.Exec(ctx, `
+		INSERT INTO outbox (tenant_id, job_id, kind, payload_json, next_run_at)
+		SELECT tenant_id, id, 'event', jsonb_build_object('type','job.succeeded','job_id',id), now()
+		FROM jobs WHERE id = $1::uuid`, jobID)
+
+	return nil
+}
+
+func (s *runnerService) finaliseFailure(ctx context.Context, jobID, runID, code, msg string) error {
+	conn, err := s.pool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to acquire db connection: %w", err)
+	}
+	defer conn.Release()
+
+	tag, err := conn.Exec(ctx, `
+		UPDATE jobs
+		SET state = CASE WHEN attempt >= max_attempts THEN 'jobs_exhausted' ELSE 'queued' END,
+			owner_id = NULL,
+			lease_expires_at = NULL,
+			next_run_at = CASE
+				WHEN attempt >= max_attempts THEN NULL
+				ELSE now() + backoff_interval(attempt, backoff_policy)
+			END,
+			last_error_code = $3,
+			last_error_message = $4,
+			updated_at = now(),
+			finished_at = CASE WHEN attempt >= max_attempts THEN now() ELSE NULL END
+		WHERE id = $1::uuid AND run_id = $2::uuid AND state = 'running'`, jobID, runID, code, msg)
+	if err != nil {
+		return fmt.Errorf("failed to finalise failure: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("fenced conflict while finalising failure")
+	}
+
+	_, _ = conn.Exec(ctx, `
+		INSERT INTO jobs_read AS r (id, tenant_id, path_key, state, attempt, max_attempts, owner_id, run_id,
+			lease_expires_at, next_run_at, accepted_at, last_error_code, last_error_message, started_at, finished_at, created_at, updated_at)
+		SELECT id, tenant_id, path_key, state, attempt, max_attempts, owner_id, run_id,
+			lease_expires_at, next_run_at, accepted_at, last_error_code, last_error_message, started_at, finished_at, created_at, updated_at
+		FROM jobs WHERE id = $1::uuid
+		ON CONFLICT (id) DO UPDATE
+		SET state = EXCLUDED.state,
+			attempt = EXCLUDED.attempt,
+			max_attempts = EXCLUDED.max_attempts,
+			owner_id = EXCLUDED.owner_id,
+			run_id = EXCLUDED.run_id,
+			lease_expires_at = EXCLUDED.lease_expires_at,
+			next_run_at = EXCLUDED.next_run_at,
+			accepted_at = EXCLUDED.accepted_at,
+			last_error_code = EXCLUDED.last_error_code,
+			last_error_message = EXCLUDED.last_error_message,
+			started_at = EXCLUDED.started_at,
+			finished_at = EXCLUDED.finished_at,
+			created_at = EXCLUDED.created_at,
+			updated_at = EXCLUDED.updated_at`, jobID)
+
 	return nil
 }
