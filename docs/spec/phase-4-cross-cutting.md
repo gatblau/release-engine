@@ -15,6 +15,8 @@
 - [SPEC: CORS](#spec-cors)
 - [SPEC: Input Validation](#spec-input-validation)
 - [SPEC: Graceful Shutdown](#spec-graceful-shutdown)
+- [SPEC: Connector Testing Framework](#spec-connector-testing-framework)
+- [SPEC: Startup Wiring and Shutdown Sequence](#spec-startup-wiring-and-shutdown-sequence)
 
 ### SPEC: Authentication and Authorisation
 

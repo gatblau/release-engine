@@ -18,6 +18,8 @@
 - [SPEC: StepAPIAdapter](#spec-stepapiadapter)
 - [SPEC: ApprovalWorker](#spec-approvalworker)
 - [SPEC: ModuleRegistry](#spec-moduleregistry)
+- [SPEC: Runner Step Executor](#spec-runner-step-executor)
+- [SPEC: BaseConnector](#spec-baseconnector)
 - [SPEC: ConnectorRegistry](#spec-connectorregistry)
 - [SPEC: VoltaManager](#spec-voltamanager)
 - [SPEC: ReconcilerService](#spec-reconcilerservice)
@@ -36,145 +38,114 @@
 **Phase:** 0
 **Dependencies:** none
 
+### SPEC: ConnectorRegistry
+
+**File:** `internal/connector/registry.go`
+**Package:** `connector`
+**Phase:** 1
+**Dependencies:** Shared Types
+
 ---
 
 #### Purpose
 
-Loads environment variables and static defaults, validates required values at startup, and exposes immutable runtime configuration.
+Manages connector registration and lookup safely for concurrent use.
 
 ---
 
-#### Shared Context (duplicated for self-containment)
+#### Interface
 
 ```go
-// ErrorResponse is the standard API error envelope.
-type ErrorResponse struct {
-    Error   string `json:"error"`
-    Code    string `json:"code"`
-    Details any    `json:"details,omitempty"`
-}
-
-// JobCreateRequest is the POST /v1/jobs request schema.
-type JobCreateRequest struct {
-    TenantID       string         `json:"tenant_id"`
-    PathKey        string         `json:"path_key"`
-    Params         map[string]any `json:"params"`
-    IdempotencyKey string         `json:"idempotency_key"`
-    CallbackURL    *string        `json:"callback_url,omitempty"`
-}
-
-// JobStatusResponse is the GET /v1/jobs/{job_id} schema.
-type JobStatusResponse struct {
-    JobID            string     `json:"job_id"`
-    TenantID         string     `json:"tenant_id"`
-    State            string     `json:"state"`
-    Attempt          int        `json:"attempt"`
-    LeaseExpiresAt   *time.Time `json:"lease_expires_at,omitempty"`
-    LastErrorCode    *string    `json:"last_error_code,omitempty"`
-    LastErrorMessage *string    `json:"last_error_message,omitempty"`
+type ConnectorRegistry interface {
+    Register(connector Connector) error
+    Replace(connector Connector) error
+    Lookup(key string) (Connector, bool)
+    ListByType(connectorType ConnectorType) []Connector
+    Close() error
 }
 ```
 
-Validation rules used by this component:
-- `tenant_id` regex: `^[a-z0-9][a-z0-9-]{1,62}$`
-- `idempotency_key` regex: `^[a-zA-Z0-9\-_.]{1,128}$`
-- Optional `schedule` must be a valid cron expression.
-- Optional `first_run_at` must be a valid RFC3339 timestamp.
-- Optional `max_attempts` defaults to `3` when omitted or invalid.
-- Maximum request body size: `262144` bytes
-- Callback URL must use HTTPS and must not resolve to blocked private/link-local/metadata ranges.
-
 ---
 
-#### Public Interface
+#### Internal Layout
 
 ```go
-type Loader interface {
-    Load(ctx context.Context) (Config, error)
-}
-
-type Config struct {
-    HTTPPort int
-    DatabaseURL string
-    OIDCIssuerURL string
-    OIDCAudience string
-    DoraPrometheusEnabled bool
-}
-```
-
-##### Example — ConfigLoader
-
-**Request:**
-```json
-{
-  "tenant_id": "acme-prod",
-  "job_id": "6c8bb1de-ef20-45cb-9e13-a57f44667d88",
-  "run_id": "8a4cfa4d-f89c-4f0e-a809-f7d9a2c8f8ad"
-}
-```
-
-**Response (200):**
-```json
-{
-  "status": "ok",
-  "component": "ConfigLoader"
-}
-```
-
-**Response (error):**
-```json
-{
-  "error": "operation failed",
-  "code": "INTERNAL_ERROR",
-  "details": null
+type connectorRegistry struct {
+    connectors map[string]Connector
+    mu         sync.RWMutex
+    closed     bool
 }
 ```
 
 ---
 
-#### Internal Logic (step-by-step)
+#### Internal Logic
 
-1. Read environment variables in precedence order: environment -> static defaults.
-2. Validate required fields: DATABASE_URL, OIDC_ISSUER_URL, OIDC_AUDIENCE, VOLTA_SM_SECRET_ID, VOLTA_S3_BUCKET.
-3. Parse typed values (durations, integers, booleans) and fail fast on invalid values.
-4. Return immutable Config; do not allow runtime mutation.
-
----
-
-#### Data Model (if this component owns a table)
-
-This component uses shared Release Engine tables and does not introduce a new table in this phase.
+1. `Register`: acquire write lock, reject duplicate keys, validate key format.
+2. `Replace`: acquire write lock, reject missing key, close old connector before replacing.
+3. `Lookup`: acquire read lock, return `(nil, false)` if missing.
+4. `ListByType`: acquire read lock, filter connectors by type prefix.
+5. `Close`: acquire write lock, close each connector, mark closed, subsequent calls return `ErrRegistryClosed`.
 
 ---
 
 #### Error Table
 
-| Condition | HTTP Status | Error Code | Response Body |
-|---|---|---|---|
-| Missing required variable | 500 | `CONFIG_MISSING` | `{"error":"missing required configuration","code":"CONFIG_MISSING","details":{"var":"DATABASE_URL"}}` |
-| Invalid typed value | 500 | `CONFIG_INVALID` | `{"error":"invalid configuration value","code":"CONFIG_INVALID","details":{"var":"HTTP_PORT"}}` |
+| Condition | Error | Code |
+|-----------|-------|------|
+| Duplicate key on Register | `fmt.Errorf("connector already registered: %s", key)` | DUPLICATE_KEY |
+| Key missing on Replace | `fmt.Errorf("connector not registered: %s", key)` | NOT_FOUND |
+| Registry already closed | `ErrRegistryClosed` | REGISTRY_CLOSED |
 
 ---
 
-#### Acceptance Criteria (Gherkin)
+#### Acceptance Criteria
 
 ```gherkin
-Feature: ConfigLoader
+Feature: ConnectorRegistry
 
-  Scenario: Happy path
-    Given valid input and healthy dependencies
-    When the component executes
-    Then it returns success and emits logs, metrics, and traces
+  Scenario: Register and lookup
+    Given a new registry
+    When registering a connector with key "git-github"
+    And looking up key "git-github"
+    Then the connector is returned
 
-  Scenario: Edge case
-    Given replayed state or partial prior progress
-    When the component executes again
-    Then it behaves deterministically without duplicate side effects
+  Scenario: Duplicate registration
+    Given a registry with "git-github" registered
+    When registering another connector with key "git-github"
+    Then it returns a duplicate key error
 
-  Scenario: Error
-    Given dependency failure or stale run ownership
-    When the component executes
-    Then it returns a structured error with explicit code
+  Scenario: Replace existing connector
+    Given a registry with "git-github" registered
+    When replacing "git-github" with a new connector
+    Then lookup returns the new connector
+    And the old connector's Close() was called
+
+  Scenario: Replace non-existent connector
+    Given an empty registry
+    When replacing "git-github"
+    Then it returns a not found error
+
+  Scenario: ListByType filters correctly
+    Given a registry with "git-github", "git-gitlab", and "cloud-aws"
+    When listing by type "git"
+    Then it returns "git-github" and "git-gitlab"
+
+  Scenario: Concurrent registration
+    Given a new registry
+    When 100 goroutines register unique connectors concurrently
+    Then all registrations succeed without races
+
+  Scenario: Close is idempotent
+    Given a registry with connectors registered
+    When Close() is called twice
+    Then no panic occurs
+    And all connectors are closed exactly once
+
+  Scenario: Operations after close
+    Given a closed registry
+    When Register or Lookup is called
+    Then it returns ErrRegistryClosed
 ```
 
 ---
@@ -183,24 +154,24 @@ Feature: ConfigLoader
 
 | Metric | Target |
 |---|---|
-| Startup config load | <150ms |
-| Validation | <20ms |
+| Register+Lookup | <1ms |
+| Close overhead | <10ms |
 
 ---
 
 #### Security Considerations
 
-- Enforce tenant isolation on every SQL read and write.
-- Redact or avoid secret values in logs, traces, and error payloads.
-- Use fenced writes (`run_id`/`effect_id`) for ownership-sensitive state transitions.
+- Enforce connector key validation before registration.
+- Redact sensitive connector error details in logs.
+- Close connectors before dropping registry to avoid leaked credentials.
 
 ---
 
 #### Observability
 
-- **Log events:** `configloader.start`, `configloader.success`, `configloader.failure`
-- **Metrics:** `release_engine_configloader_total{status}`, `release_engine_configloader_duration_seconds`
-- **Trace span:** `config.load`
+- **Log events:** `connectorregistry.register`, `connectorregistry.replace`, `connectorregistry.close`
+- **Metrics:** `connectorregistry_registered_total`, `connectorregistry_operations_total`
+- **Trace span:** `connector.registry`
 
 ---
 
@@ -208,6 +179,9 @@ Feature: ConfigLoader
 
 | Direction | Component | Mechanism | Data Exchanged |
 |---|---|---|---|
+| This → Connector implementations | in-process | registration | connector metadata |
+| StepExecutor → This | in-process | lookup | connector key, operation |
+| RunnerService → This | in-process | close all | connectors |
 | This → DBPool | outbound call | pgx query/exec | SQL statements, parameters, transaction result |
 | This → MetricsExporter | outbound call | in-process API | counters, histograms, labels |
 | This → TracingService | outbound call | OpenTelemetry | span start/end, attributes, errors |
@@ -2627,7 +2601,6 @@ Feature: ApprovalWorker
 | This → Steps/ApprovalDecisions storage | outbound call | SQL read/write | waiting approval rows, expiry decisions |
 | This → OutboxDispatcher | outbound call | outbox enqueue | `approval_escalated`, `approval_expired` events |
 | This → MetricsExporter | outbound call | in-process API | escalation and timeout counters |
-
 ### SPEC: ModuleRegistry
 
 **File:** `internal/registry/module_registry.go`
@@ -2800,6 +2773,100 @@ Feature: ModuleRegistry
 | This → MetricsExporter | outbound call | in-process API | counters, histograms, labels |
 | This → TracingService | outbound call | OpenTelemetry | span start/end, attributes, errors |
 | Upstream runtime → This | inbound call | in-process call | context, tenant_id, job_id, run_id |
+### SPEC: Runner Step Executor
+
+**File:** `internal/runner/step_executor.go`
+**Package:** `runner`
+**Phase:** 1
+**Dependencies:** ConnectorRegistry, Shared Types, LoggerFactory, MetricsExporter
+
+---
+
+#### Purpose
+
+Looks up connectors by key, enforces step timeout/deadline, recovers panics, logs call lifecycle, and emits connector metrics.
+
+---
+
+#### Public Interface
+
+```go
+type StepExecutor struct {
+    registry ConnectorRegistry
+    logger   Logger
+    metrics  MetricsExporter
+}
+
+func NewStepExecutor(registry ConnectorRegistry, logger Logger, metrics MetricsExporter) *StepExecutor
+func (e *StepExecutor) Execute(ctx context.Context, req StepRequest) (*ConnectorResult, error)
+```
+
+`StepRequest` carries call_id, connector_key, operation, payload, timeout.
+
+---
+
+#### Internal Logic
+
+1. Inject call_id and step-specific timeout (`context.WithTimeout`).
+2. Lookup connector, return terminal error result if missing.
+3. Validate operation/input before executing.
+4. Write call log entry pre-call.
+5. Execute connector inside `recover()` to map panics to terminal errors.
+6. Translate Go errors to terminal status with `INFRASTRUCTURE_ERROR` code.
+7. Emit metrics (`connector_call_duration_seconds`, `connector_call_total`).
+8. Write post-call log entry (status, duration, error code).
+
+---
+
+#### Result Mapping & Errors
+
+| Condition | Result Status | Code |
+|-----------|---------------|------|
+| Connector missing | terminal_error | CONNECTOR_NOT_FOUND |
+| Validation failure | terminal_error | VALIDATION_FAILED |
+| Panic | terminal_error | PANIC |
+| Timeout | terminal_error | TIMEOUT |
+| Go error | terminal_error | INFRASTRUCTURE_ERROR |
+
+---
+
+#### Acceptance Criteria
+
+Focus on happy path, validation failure, panic recovery, timeouts, infrastructure errors as per connector plan.
+
+---
+
+### SPEC: BaseConnector
+
+**File:** `internal/connector/base.go`
+**Package:** `connector`
+**Phase:** 1
+**Dependencies:** Shared Types
+
+---
+
+#### Purpose
+
+Provides reusable `Type()`, `Technology()`, `Key()` helpers plus validation for connector implementations.
+
+#### Validation Rules
+- connector type must belong to `ValidConnectorTypes`
+- technology string must be non-empty and contain no hyphens
+
+---
+
+#### Constructors
+
+```go
+func NewBaseConnector(ctype ConnectorType, tech string) (BaseConnector, error)
+```
+
+---
+
+#### Acceptance Criteria
+- rejects unknown types, empty and hyphenated technology names
+- `Key()` returns `type-technology`
+---
 
 ### SPEC: ConnectorRegistry
 

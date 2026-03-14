@@ -46,6 +46,10 @@ type MetricsExporter struct {
 	doraDeadLetterTotal        *prometheus.CounterVec
 	doraTenantsAboveCFRTotal   *prometheus.GaugeVec
 	doraTenantsWithNoDataTotal *prometheus.GaugeVec
+
+	connectorCallTotal      *prometheus.CounterVec
+	connectorCallDuration   *prometheus.HistogramVec
+	connectorTransportRetry *prometheus.CounterVec
 }
 
 type MetricsExporterOption func(*MetricsExporter)
@@ -395,6 +399,40 @@ func (m *MetricsExporter) RegisterCollectors() error {
 		return err
 	}
 
+	m.connectorCallTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "release_engine_connector_call_total",
+			Help: "Total number of connector calls",
+		},
+		[]string{"connector_key", "operation", "status"},
+	)
+	if err := m.registerCollector("connector_call_total", m.connectorCallTotal); err != nil {
+		return err
+	}
+
+	m.connectorCallDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "release_engine_connector_call_duration_seconds",
+			Help:    "Duration of connector calls in seconds",
+			Buckets: []float64{0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 5.0, 10.0, 30.0},
+		},
+		[]string{"connector_key", "operation", "status"},
+	)
+	if err := m.registerCollector("connector_call_duration_seconds", m.connectorCallDuration); err != nil {
+		return err
+	}
+
+	m.connectorTransportRetry = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "release_engine_connector_transport_retries_total",
+			Help: "Total number of connector transport retries",
+		},
+		[]string{"connector_key"},
+	)
+	if err := m.registerCollector("connector_transport_retries_total", m.connectorTransportRetry); err != nil {
+		return err
+	}
+
 	m.logger.Info("metricsexporter.start", zap.String("component", "MetricsExporter"))
 	m.logger.Info("metricsexporter.success", zap.String("component", "MetricsExporter"))
 
@@ -586,4 +624,19 @@ func (m *MetricsExporter) RecordDoraTenantsWithNoDoraData(metric string, total f
 		return
 	}
 	m.doraTenantsWithNoDataTotal.WithLabelValues(metric).Set(total)
+}
+
+func (m *MetricsExporter) RecordConnectorCall(connectorKey, operation, status string, duration time.Duration) {
+	if m.connectorCallTotal != nil {
+		m.connectorCallTotal.WithLabelValues(connectorKey, operation, status).Inc()
+	}
+	if m.connectorCallDuration != nil {
+		m.connectorCallDuration.WithLabelValues(connectorKey, operation, status).Observe(duration.Seconds())
+	}
+}
+
+func (m *MetricsExporter) RecordConnectorRetry(connectorKey string) {
+	if m.connectorTransportRetry != nil {
+		m.connectorTransportRetry.WithLabelValues(connectorKey).Inc()
+	}
 }

@@ -122,3 +122,14 @@
 
 38. [ ] Add and run observability-focused tests for approval metrics.
         Verify: unit tests cover collector registration and metric emission from service/worker paths.
+
+## 10. Connector Infrastructure (Phase 9)
+
+39. [ ] Implement **Connector Testing Framework** contract tests.
+        Verify: any new connector successfully passes `RunConnectorContractTests` and `MockConnector` used in runner/registry tests behaves deterministically.
+
+40. [ ] Capture connector startup wiring and shutdown order.
+        Verify: `main()` registers GitHub/AWS/Crossplane connectors explicitly, the `StepExecutor` can resolve them, and `registry.Close()` runs before closing DB/Volta on shutdown.
+
+41. [ ] Document failure cases for missing Volta secrets during startup.
+        Verify: startup aborts with clear errors before serving requests when a required secret is missing.

@@ -3,6 +3,7 @@
 ## Table of Contents
 
 - [2A — System Context Diagram (Mermaid)](#2a--system-context-diagram-mermaid)
+- [2A.1 — Connector Context Diagram (Mermaid)](#2a1--connector-context-diagram-mermaid)
 - [2B — Component Inventory](#2b--component-inventory)
 - [2C — Shared Types Catalogue](#2c--shared-types-catalogue)
 - [2D — Configuration & Environment Variables](#2d--configuration--environment-variables)
@@ -89,6 +90,59 @@ flowchart LR
   OBS -->|OTLP gRPC or HTTP over TLS with OpenTelemetry context| TRACE
 ```
 
+## 2A.1 — Connector Context Diagram (Mermaid)
+
+```mermaid
+flowchart LR
+  subgraph Modules["Modules"]
+    M1["Module 1: scaffold-service"]
+    M2["Module 2: deploy-eks"]
+  end
+
+  subgraph Connectors["Connectors"]
+    CG["GitHub Git"]
+    CA["AWS Cloud"]
+    CK["Crossplane Infra"]
+  end
+
+  subgraph Providers["External Providers"]
+    PG[GitHub API]
+    PA[AWS API]
+    PC[Crossplane API]
+  end
+
+  subgraph Registry["Connector Registry"]
+    CR[Connector Registry]
+  end
+
+  subgraph Runner["Release Engine Runner"]
+    RS[Runner Service]
+    SA[Step Executor]
+  end
+
+  subgraph Engine["Release Engine Core"]
+    SE[Scheduler]
+    JE[Jobs Engine]
+  end
+
+  M1 -->|connector: git-github| SA
+  M2 -->|connector: cloud-aws| SA
+  M2 -->|connector: infra-crossplane| SA
+
+  SA -->|lookup| CR
+  CR -->|returns| CG
+  CR -->|returns| CA
+  CR -->|returns| CK
+
+  CG -->|HTTPS + call_id| PG
+  CA -->|HTTPS + call_id| PA
+  CK -->|HTTPS + call_id| PC
+
+  JE -->|schedule| SE
+  SE -->|dispatch| RS
+  RS -->|execute| SA
+```
+
 ## 2B — Component Inventory
 
 | Component | Type | Phase | Dependencies | Estimated Complexity |
@@ -109,6 +163,13 @@ flowchart LR
 | StepAPIAdapter | service | 2 | DBPool, RunnerService | medium |
 | ModuleRegistry | service | 2 | ConfigLoader | low |
 | ConnectorRegistry | service | 2 | ConfigLoader | low |
+| Runner Step Executor | service | 2 | ConnectorRegistry, LoggerFactory, MetricsExporter | medium |
+| BaseConnector | pkg | 2 | Shared Types | low |
+| GitHubConnector | service | 2 | BaseConnector, ConnectorConfig, VoltaManager | high |
+| CrossplaneConnector | service | 2 | BaseConnector, ConnectorConfig, VoltaManager, Kubernetes client | high |
+| AWSConnector | service | 2 | BaseConnector, ConnectorConfig, VoltaManager, AWS SDK v2 | high |
+| Connector Testing Framework | pkg | 3 | Shared Types, ConnectorRegistry | medium |
+| Startup Wiring | pkg | 1 | ConfigLoader, ConnectorRegistry, VoltaManager | medium |
 | VoltaManager | service | 2 | ConfigLoader, LoggerFactory | high |
 | ReconcilerService | service | 2 | DBPool, ConnectorRegistry, MetricsService | high |
 | OutboxDispatcher | service | 2 | DBPool, CallbackSigner, MetricsService | high |
@@ -155,6 +216,143 @@ type ApprovalRequest struct {
 	PolicyRef   string            `json:"policy_ref"`
 	Metadata    map[string]string `json:"metadata"`
 }
+```
+
+### Connector Shared Types Catalogue
+
+```go
+package connector
+
+import (
+    "context"
+    "fmt"
+    "strings"
+    "time"
+)
+
+// --- Connector Types ---
+
+type ConnectorType string
+
+const (
+    ConnectorTypeGit    ConnectorType = "git"
+    ConnectorTypeCloud  ConnectorType = "cloud"
+    ConnectorTypeCD     ConnectorType = "cd"
+    ConnectorTypeInfra  ConnectorType = "infra"
+    ConnectorTypeDevOps ConnectorType = "devops"
+    ConnectorTypeOther  ConnectorType = "other"
+)
+
+var ValidConnectorTypes = map[ConnectorType]bool{
+    ConnectorTypeGit:    true,
+    ConnectorTypeCloud:  true,
+    ConnectorTypeCD:     true,
+    ConnectorTypeInfra:  true,
+    ConnectorTypeDevOps: true,
+    ConnectorTypeOther:  true,
+}
+
+// --- Result Types ---
+
+const (
+    StatusSuccess        = "success"
+    StatusRetryableError = "retryable_error"
+    StatusTerminalError  = "terminal_error"
+)
+
+type ConnectorResult struct {
+    Status string
+    Output map[string]interface{}
+    Error  *ConnectorError
+}
+
+type ConnectorError struct {
+    Code    string
+    Message string
+    Details map[string]interface{}
+}
+
+func (e *ConnectorError) Error() string {
+    return fmt.Sprintf("[%s] %s", e.Code, e.Message)
+}
+
+type ConnectorConfig struct {
+    HTTPTimeout      time.Duration
+    TransportRetries int
+    Extra            map[string]string
+}
+
+func DefaultConnectorConfig() ConnectorConfig {
+    return ConnectorConfig{
+        HTTPTimeout:      30 * time.Second,
+        TransportRetries: 3,
+        Extra:            make(map[string]string),
+    }
+}
+
+type contextKey string
+
+const callIDKey contextKey = "call_id"
+
+func WithCallID(ctx context.Context, callID string) context.Context {
+    return context.WithValue(ctx, callIDKey, callID)
+}
+
+func CallIDFromContext(ctx context.Context) string {
+    if v, ok := ctx.Value(callIDKey).(string); ok {
+        return v
+    }
+    return ""
+}
+
+type Connector interface {
+    Key() string
+    Validate(operation string, input map[string]interface{}) error
+    Execute(ctx context.Context, operation string, input map[string]interface{}) (*ConnectorResult, error)
+    Close() error
+}
+
+type OperationDescriber interface {
+    Operations() []OperationMeta
+}
+
+type OperationMeta struct {
+    Name           string
+    Description    string
+    RequiredFields []string
+    OptionalFields []string
+    IsAsync        bool
+}
+
+type ConnectorRegistry interface {
+    Register(conn Connector) error
+    Replace(conn Connector) error
+    Lookup(key string) (Connector, bool)
+    ListByType(connectorType ConnectorType) []Connector
+    Close() error
+}
+
+type BaseConnector struct {
+    connectorType ConnectorType
+    technology    string
+}
+
+func NewBaseConnector(ctype ConnectorType, tech string) (BaseConnector, error) {
+    if !ValidConnectorTypes[ctype] {
+        return BaseConnector{}, fmt.Errorf("unknown connector type: %s", ctype)
+    }
+    if tech == "" {
+        return BaseConnector{}, fmt.Errorf("technology must not be empty")
+    }
+    if strings.Contains(tech, "-") {
+        return BaseConnector{}, fmt.Errorf("technology must not contain hyphens: %s", tech)
+    }
+    return BaseConnector{connectorType: ctype, technology: tech}, nil
+}
+
+func (b *BaseConnector) Type() ConnectorType { return b.connectorType }
+func (b *BaseConnector) Technology() string   { return b.technology }
+func (b *BaseConnector) Key() string          { return fmt.Sprintf("%s-%s", b.connectorType, b.technology) }
 ```
 
 ## 2D — Configuration & Environment Variables

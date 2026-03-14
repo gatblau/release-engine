@@ -14,7 +14,8 @@
 ✅ Example request and response payloads are present for component specs with execution logic.  
 ✅ Shared types are defined and reused consistently.  
 ✅ Security controls (authentication, authorisation, validation, SSRF, secret handling) are specified for every entry point.  
-✅ Performance targets are stated for latency-sensitive paths.
+✅ Performance targets are stated for latency-sensitive paths.  
+✅ Connector testing, wiring, and shutdown categories have explicit audit checklists in the playbook and cross-cutting specs.
 
 ## Audit Notes
 
