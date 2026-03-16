@@ -1,0 +1,36 @@
+name: data-proc
+description: "Data processing baseline with Kubernetes, messaging and object storage"
+version: "1.0"
+composition_ref: "composition-data-proc-v1"
+
+required_capabilities:
+  - kubernetes
+  - object_storage
+  - messaging
+
+optional_capabilities:
+  - database
+  - cache
+  - block_storage
+  - file_storage
+  - vpc
+  - identity
+  - secrets
+  - observability
+
+forbidden_capabilities:
+  - vm
+  - cdn
+
+constraints:
+  allowed_environments: [development, staging, production]
+  allowed_workload_profiles: [medium, large, xlarge]
+  allowed_availabilities: [standard, high, critical]
+  allowed_residencies: [eu, us, global]
+  requires_approval: false
+  max_cost_monthly: 80000
+
+defaults:
+  kubernetes_tier: advanced
+  object_storage_versioning: true
+  composition_ref: composition-data-proc-v1

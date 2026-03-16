@@ -1,0 +1,34 @@
+name: vm-app
+description: "VM workload baseline"
+version: "1.0"
+composition_ref: "composition-vm-app-v1"
+
+required_capabilities:
+  - vm
+
+optional_capabilities:
+  - database
+  - object_storage
+  - block_storage
+  - file_storage
+  - vpc
+  - load_balancer
+  - dns
+  - identity
+  - secrets
+  - observability
+
+forbidden_capabilities:
+  - kubernetes
+  - cdn
+
+constraints:
+  allowed_environments: [development, staging, production]
+  allowed_workload_profiles: [small, medium, large, xlarge]
+  allowed_availabilities: [standard, high]
+  allowed_residencies: [eu, us]
+  requires_approval: true
+  max_cost_monthly: 30000
+
+defaults:
+  composition_ref: composition-vm-app-v1
