@@ -1,0 +1,22 @@
+contract_version: v1
+request_name: checkout-prod
+tenant: payments
+owner: platform-team
+environment: production
+workload_profile: medium
+template_name: k8s-app
+composition_ref: composition-k8s-application-v1
+namespace: platform-system
+residency: eu
+primary_region: eu-west-1
+secondary_region: eu-central-1
+availability: high
+data_classification: confidential
+ingress_mode: public
+egress_mode: nat
+dr_required: true
+backup_required: true
+kubernetes:
+  enabled: true
+  tier: standard
+  size: medium

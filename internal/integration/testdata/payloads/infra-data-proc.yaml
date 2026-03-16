@@ -1,0 +1,34 @@
+contract_version: v1
+request_name: data-pipeline-prod
+tenant: analytics
+owner: data-platform
+environment: production
+workload_profile: large
+template_name: data-proc
+composition_ref: composition-data-proc-v1
+namespace: platform-system
+residency: eu
+primary_region: eu-west-1
+secondary_region: eu-central-1
+availability: high
+data_classification: confidential
+ingress_mode: private
+egress_mode: nat
+dr_required: true
+backup_required: true
+kubernetes:
+  enabled: true
+  tier: advanced
+  size: large
+object_store:
+  enabled: true
+  class: standard
+  versioning: true
+  bucket_count: 2
+messaging:
+  enabled: true
+  tier: enterprise
+  queue_count: 4
+  topic_count: 2
+  dlq_enabled: true
+  dlq_max_retry: 5

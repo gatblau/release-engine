@@ -1,0 +1,27 @@
+contract_version: v1
+request_name: vm-legacy-prod
+tenant: core-systems
+owner: platform-ops
+environment: production
+workload_profile: medium
+template_name: vm-app
+composition_ref: composition-vm-app-v1
+namespace: platform-system
+residency: eu
+primary_region: eu-west-1
+secondary_region: eu-central-1
+availability: high
+data_classification: internal
+ingress_mode: private
+egress_mode: nat
+dr_required: true
+backup_required: true
+vm:
+  enabled: true
+  count: 2
+  instance_family: m7
+  size: large
+  os_family: linux
+  os_image: ubuntu-22.04
+  arch: amd64
+  multi_az: true

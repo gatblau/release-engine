@@ -1,6 +1,6 @@
 # Makefile for release-engine
 
-.PHONY: lint test test-smoke security
+.PHONY: lint test test-smoke test-infra-integration security
 
 # Check if golangci-lint is installed, if not install it
 lint-check:
@@ -22,6 +22,11 @@ test:
 test-smoke:
 	@echo "Running smoke tests (container verification)..."
 	@go test -tags=integration -v ./internal/smoke/...
+
+# Run infra integration tests (phase 4 scenarios)
+test-infra-integration:
+	@echo "Running infra integration tests..."
+	@go test -tags=integration -v ./internal/integration -run TestInfraIntegration
 
 test-race:
 	@echo "Running tests with race detection..."

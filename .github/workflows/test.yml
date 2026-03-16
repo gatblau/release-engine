@@ -95,6 +95,11 @@ jobs:
           fi
         continue-on-error: true
 
+      - name: Run infra integration tests
+        id: infra_integration
+        run: make test-infra-integration
+        continue-on-error: true
+
       - name: Update badge data
         if: github.ref == 'refs/heads/main' && github.event_name == 'push' && always()
         run: |
@@ -157,7 +162,8 @@ jobs:
         run: |
           if [ "${{ steps.lint.outcome }}" == "failure" ] || \
              [ "${{ steps.security.outcome }}" == "failure" ] || \
-             [ "${{ steps.tests.outcome }}" == "failure" ]; then
+             [ "${{ steps.tests.outcome }}" == "failure" ] || \
+             [ "${{ steps.infra_integration.outcome }}" == "failure" ]; then
             echo "One or more checks failed"
             exit 1
           fi
