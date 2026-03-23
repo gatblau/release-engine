@@ -1,0 +1,216 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: xloadbalancer-aws-alb
+  labels:
+    provider: aws
+    service: elbv2
+spec:
+  compositeTypeRef:
+    apiVersion: infrastructure.platform.io/v1alpha1
+    kind: XLoadBalancer
+
+  mode: Pipeline
+  pipeline:
+    - step: render
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- $xr := .observed.composite.resource }}
+            {{- $spec := $xr.spec.parameters }}
+            {{- $name := $xr.metadata.name }}
+            {{- $region := $spec.region }}
+            {{- $providerConfigName := default "aws-provider" $spec.providerConfigRef }}
+            {{- $type := default "application" $spec.type }}
+            {{- $scheme := default "internal" $spec.scheme }}
+            {{- $tags := default dict $spec.tags }}
+
+            {{- $listener := default dict $spec.listener }}
+            {{- $listenerPort := default 443 $listener.port }}
+            {{- $listenerProtocol := default "HTTPS" $listener.protocol }}
+
+            {{- $target := default dict $spec.target }}
+            {{- $targetPort := default 8080 $target.port }}
+            {{- $targetProtocol := default "HTTP" $target.protocol }}
+            {{- $healthCheckPath := default "/health" $target.healthCheckPath }}
+            {{- $targetType := default "ip" $target.targetType }}
+
+            {{/* ============================================================
+                 LOAD BALANCER
+                 ============================================================ */}}
+            ---
+            apiVersion: elbv2.aws.upbound.io/v1beta2
+            kind: LB
+            metadata:
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: load-balancer
+              labels:
+                lb: {{ $name }}
+            spec:
+              deletionPolicy: Delete
+              providerConfigRef:
+                name: {{ $providerConfigName }}
+              forProvider:
+                region: {{ $region }}
+                loadBalancerType: {{ $type }}
+                internal: {{ eq $scheme "internal" }}
+                subnets:
+                {{- range $subnet := $spec.subnetIds }}
+                  - {{ $subnet }}
+                {{- end }}
+                {{- if and $spec.securityGroupIds (eq $type "application") }}
+                securityGroups:
+                {{- range $sg := $spec.securityGroupIds }}
+                  - {{ $sg }}
+                {{- end }}
+                {{- end }}
+                enableDeletionProtection: false
+                {{- if eq $type "application" }}
+                dropInvalidHeaderFields: true
+                {{- end }}
+                tags:
+                {{- range $k, $v := $tags }}
+                  {{ $k }}: {{ $v | quote }}
+                {{- end }}
+                  managed-by: crossplane
+
+            {{/* ============================================================
+                 TARGET GROUP
+                 ============================================================ */}}
+            ---
+            apiVersion: elbv2.aws.upbound.io/v1beta2
+            kind: LBTargetGroup
+            metadata:
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: target-group
+              labels:
+                lb: {{ $name }}
+            spec:
+              deletionPolicy: Delete
+              providerConfigRef:
+                name: {{ $providerConfigName }}
+              forProvider:
+                region: {{ $region }}
+                port: {{ $targetPort }}
+                protocol: {{ $targetProtocol }}
+                vpcId: {{ $spec.vpcId }}
+                targetType: {{ $targetType }}
+                {{- if eq $type "application" }}
+                healthCheck:
+                  - enabled: true
+                    path: {{ $healthCheckPath }}
+                    port: "traffic-port"
+                    protocol: {{ $targetProtocol }}
+                    healthyThreshold: 3
+                    unhealthyThreshold: 3
+                    timeout: 5
+                    interval: 30
+                    matcher: "200-299"
+                deregistrationDelay: "30"
+                {{- else }}
+                healthCheck:
+                  - enabled: true
+                    port: "traffic-port"
+                    protocol: TCP
+                    healthyThreshold: 3
+                    unhealthyThreshold: 3
+                    interval: 30
+                {{- end }}
+                tags:
+                {{- range $k, $v := $tags }}
+                  {{ $k }}: {{ $v | quote }}
+                {{- end }}
+                  managed-by: crossplane
+
+            {{/* ============================================================
+                 LISTENER
+                 ============================================================ */}}
+            ---
+            apiVersion: elbv2.aws.upbound.io/v1beta2
+            kind: LBListener
+            metadata:
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: listener
+            spec:
+              deletionPolicy: Delete
+              providerConfigRef:
+                name: {{ $providerConfigName }}
+              forProvider:
+                region: {{ $region }}
+                loadBalancerArnSelector:
+                  matchControllerRef: true
+                  matchLabels:
+                    lb: {{ $name }}
+                port: {{ $listenerPort }}
+                protocol: {{ $listenerProtocol }}
+                {{- if or (eq $listenerProtocol "HTTPS") (eq $listenerProtocol "TLS") }}
+                {{- if $listener.certificateArn }}
+                certificateArn: {{ $listener.certificateArn }}
+                sslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06
+                {{- end }}
+                {{- end }}
+                defaultAction:
+                  - type: forward
+                    targetGroupArnSelector:
+                      matchControllerRef: true
+                      matchLabels:
+                        lb: {{ $name }}
+
+            {{/* ============================================================
+                 HTTP→HTTPS REDIRECT (opinionated: auto-created for HTTPS listeners)
+                 ============================================================ */}}
+            {{- if and (eq $listenerProtocol "HTTPS") (eq $type "application") }}
+            ---
+            apiVersion: elbv2.aws.upbound.io/v1beta2
+            kind: LBListener
+            metadata:
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: redirect-listener
+            spec:
+              deletionPolicy: Delete
+              providerConfigRef:
+                name: {{ $providerConfigName }}
+              forProvider:
+                region: {{ $region }}
+                loadBalancerArnSelector:
+                  matchControllerRef: true
+                  matchLabels:
+                    lb: {{ $name }}
+                port: 80
+                protocol: HTTP
+                defaultAction:
+                  - type: redirect
+                    redirect:
+                      - port: "443"
+                        protocol: HTTPS
+                        statusCode: HTTP_301
+            {{- end }}
+
+            {{/* ============================================================
+                 STATUS
+                 ============================================================ */}}
+            ---
+            apiVersion: infrastructure.platform.io/v1alpha1
+            kind: XLoadBalancer
+            metadata:
+              name: {{ $name }}
+            status:
+              {{- $lb := index .observed.resources "load-balancer" }}
+              {{- if and $lb $lb.resource $lb.resource.status $lb.resource.status.atProvider }}
+              loadBalancerArn: {{ $lb.resource.status.atProvider.arn }}
+              dnsName: {{ $lb.resource.status.atProvider.dnsName }}
+              hostedZoneId: {{ $lb.resource.status.atProvider.zoneId }}
+              {{- end }}
+              {{- $tg := index .observed.resources "target-group" }}
+              {{- if and $tg $tg.resource $tg.resource.status $tg.resource.status.atProvider }}
+              targetGroupArn: {{ $tg.resource.status.atProvider.arn }}
+              {{- end }}
+
+    - step: ready
+      functionRef:
+        name: function-auto-ready

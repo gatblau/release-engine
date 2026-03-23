@@ -1,0 +1,23 @@
+apiVersion: infrastructure.platform.io/v1alpha1
+kind: XKubernetesCluster
+metadata:
+  name: my-cluster
+  namespace: team-alpha
+spec:
+  compositionRef:
+    name: xkubernetescluster-aws-eks
+  parameters:
+    region: us-east-1
+    version: "1.31"
+    subnetIds:
+      - subnet-aaa
+      - subnet-bbb
+      - subnet-ccc
+    nodePool:
+      instanceType: m5.xlarge
+      minNodes: 2
+      maxNodes: 5
+    adminPrincipalArn: arn:aws:iam::123456789012:role/platform-admin
+    tags:
+      team: alpha
+      environment: production

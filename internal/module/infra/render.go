@@ -18,6 +18,11 @@ func RenderManifests(params *template.ProvisionParams) ([]byte, error) {
 		return nil, fmt.Errorf("load catalog definitions: %w", err)
 	}
 
+	// Validate catalogs against supported providers at startup
+	if err := catalog.ValidateCatalogs(catalogs, template.SupportedProviders); err != nil {
+		return nil, fmt.Errorf("catalog validation failed: %w", err)
+	}
+
 	engine := template.NewEngineWithCatalog(
 		catalogs,
 		&fragments.TagsFragment{},

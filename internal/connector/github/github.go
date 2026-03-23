@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/gatblau/release-engine/internal/connector"
@@ -69,6 +70,8 @@ func (c *GitHubConnector) Validate(operation string, input map[string]interface{
 		"create_pull_request":         {"owner", "repo", "title", "head", "base"},
 		"add_repository_collaborator": {"owner", "repo", "username"},
 		"create_repository_webhook":   {"owner", "repo", "url", "events"},
+		"commit_files":                {"repo", "branch", "path_prefix", "files", "message", "idempotency_key"},
+		"read_file":                   {"repo", "branch", "path"},
 	}
 
 	fields, ok := requiredFields[operation]
@@ -104,6 +107,10 @@ func (c *GitHubConnector) Execute(ctx context.Context, operation string, input m
 		return c.addRepositoryCollaborator(ctx, input)
 	case "create_repository_webhook":
 		return c.createRepositoryWebhook(ctx, input)
+	case "commit_files":
+		return c.commitFiles(ctx, input)
+	case "read_file":
+		return c.readFile(ctx, input)
 	default:
 		return nil, fmt.Errorf("operation not implemented: %s", operation)
 	}
@@ -214,6 +221,235 @@ func (c *GitHubConnector) createRepositoryWebhook(ctx context.Context, input map
 	}, nil
 }
 
+func (c *GitHubConnector) commitFiles(ctx context.Context, input map[string]interface{}) (*connector.ConnectorResult, error) {
+	// Parse repo as "owner/name"
+	repo := input["repo"].(string)
+	branch := input["branch"].(string)
+	pathPrefix := input["path_prefix"].(string)
+	filesMap := input["files"].(map[string]interface{})
+	message := input["message"].(string)
+	idempotencyKey := input["idempotency_key"].(string)
+	_ = idempotencyKey // Mark as used for now
+
+	// Split repo into owner and name
+	parts := splitRepo(repo)
+	if parts == nil {
+		return &connector.ConnectorResult{
+			Status: connector.StatusTerminalError,
+			Error: &connector.ConnectorError{
+				Code:    "INVALID_REPO",
+				Message: "repo must be in format 'owner/name'",
+			},
+		}, nil
+	}
+	owner, repoName := parts[0], parts[1]
+
+	// Get the current commit SHA for the branch
+	ref, _, err := c.client.Git.GetRef(ctx, owner, repoName, "refs/heads/"+branch)
+	if err != nil {
+		return &connector.ConnectorResult{
+			Status: connector.StatusTerminalError,
+			Error: &connector.ConnectorError{
+				Code:    "BRANCH_NOT_FOUND",
+				Message: fmt.Sprintf("branch %s not found: %v", branch, err),
+			},
+		}, nil
+	}
+	commitSHA := ref.GetObject().GetSHA()
+
+	// Get the tree SHA for that commit
+	commit, _, err := c.client.Git.GetCommit(ctx, owner, repoName, commitSHA)
+	if err != nil {
+		return &connector.ConnectorResult{
+			Status: connector.StatusTerminalError,
+			Error: &connector.ConnectorError{
+				Code:    "COMMIT_NOT_FOUND",
+				Message: fmt.Sprintf("commit %s not found: %v", commitSHA, err),
+			},
+		}, nil
+	}
+	baseTreeSHA := commit.GetTree().GetSHA()
+
+	// Create tree entries for each file
+	var treeEntries []*github.TreeEntry
+	changed := false
+	for path, contentInterface := range filesMap {
+		content, ok := contentInterface.(string)
+		if !ok {
+			return &connector.ConnectorResult{
+				Status: connector.StatusTerminalError,
+				Error: &connector.ConnectorError{
+					Code:    "INVALID_CONTENT",
+					Message: fmt.Sprintf("content for path %s must be a string", path),
+				},
+			}, nil
+		}
+		fullPath := pathPrefix + path
+		// Check if file exists and content differs
+		fileContent, _, _, err := c.client.Repositories.GetContents(ctx, owner, repoName, fullPath, &github.RepositoryContentGetOptions{Ref: branch})
+		if err == nil {
+			// File exists, compare content
+			existingContent, err := fileContent.GetContent()
+			if err == nil && existingContent == content {
+				// Content identical, skip
+				continue
+			}
+		}
+		changed = true
+		blob := &github.Blob{
+			Content:  github.String(content),
+			Encoding: github.String("utf-8"),
+		}
+		createdBlob, _, err := c.client.Git.CreateBlob(ctx, owner, repoName, blob)
+		if err != nil {
+			return &connector.ConnectorResult{
+				Status: connector.StatusTerminalError,
+				Error: &connector.ConnectorError{
+					Code:    "BLOB_CREATE_FAILED",
+					Message: fmt.Sprintf("failed to create blob for %s: %v", fullPath, err),
+				},
+			}, nil
+		}
+		treeEntries = append(treeEntries, &github.TreeEntry{
+			Path: github.String(fullPath),
+			Mode: github.String("100644"),
+			Type: github.String("blob"),
+			SHA:  github.String(createdBlob.GetSHA()),
+		})
+	}
+
+	// If no changes, return early with changed=false
+	if !changed {
+		return &connector.ConnectorResult{
+			Status: connector.StatusSuccess,
+			Output: map[string]interface{}{
+				"commit_sha": commitSHA,
+				"changed":    false,
+			},
+		}, nil
+	}
+
+	// Create new tree
+	tree, _, err := c.client.Git.CreateTree(ctx, owner, repoName, baseTreeSHA, treeEntries)
+	if err != nil {
+		return &connector.ConnectorResult{
+			Status: connector.StatusTerminalError,
+			Error: &connector.ConnectorError{
+				Code:    "TREE_CREATE_FAILED",
+				Message: fmt.Sprintf("failed to create tree: %v", err),
+			},
+		}, nil
+	}
+
+	// Create new commit
+	newCommit := &github.Commit{
+		Message: github.String(message),
+		Tree:    tree,
+		Parents: []*github.Commit{{SHA: github.String(commitSHA)}},
+	}
+	createdCommit, _, err := c.client.Git.CreateCommit(ctx, owner, repoName, newCommit, nil)
+	if err != nil {
+		return &connector.ConnectorResult{
+			Status: connector.StatusTerminalError,
+			Error: &connector.ConnectorError{
+				Code:    "COMMIT_CREATE_FAILED",
+				Message: fmt.Sprintf("failed to create commit: %v", err),
+			},
+		}, nil
+	}
+
+	// Update branch reference
+	_, _, err = c.client.Git.UpdateRef(ctx, owner, repoName, &github.Reference{
+		Ref: github.String("refs/heads/" + branch),
+		Object: &github.GitObject{
+			SHA: github.String(createdCommit.GetSHA()),
+		},
+	}, false)
+	if err != nil {
+		return &connector.ConnectorResult{
+			Status: connector.StatusTerminalError,
+			Error: &connector.ConnectorError{
+				Code:    "REF_UPDATE_FAILED",
+				Message: fmt.Sprintf("failed to update branch: %v", err),
+			},
+		}, nil
+	}
+
+	return &connector.ConnectorResult{
+		Status: connector.StatusSuccess,
+		Output: map[string]interface{}{
+			"commit_sha": createdCommit.GetSHA(),
+			"changed":    true,
+		},
+	}, nil
+}
+
+func (c *GitHubConnector) readFile(ctx context.Context, input map[string]interface{}) (*connector.ConnectorResult, error) {
+	repo := input["repo"].(string)
+	branch := input["branch"].(string)
+	path := input["path"].(string)
+
+	parts := splitRepo(repo)
+	if parts == nil {
+		return &connector.ConnectorResult{
+			Status: connector.StatusTerminalError,
+			Error: &connector.ConnectorError{
+				Code:    "INVALID_REPO",
+				Message: "repo must be in format 'owner/name'",
+			},
+		}, nil
+	}
+	owner, repoName := parts[0], parts[1]
+
+	fileContent, _, resp, err := c.client.Repositories.GetContents(ctx, owner, repoName, path, &github.RepositoryContentGetOptions{Ref: branch})
+	if err != nil {
+		if resp != nil && resp.StatusCode == 404 {
+			return &connector.ConnectorResult{
+				Status: connector.StatusTerminalError,
+				Error: &connector.ConnectorError{
+					Code:    "FILE_NOT_FOUND",
+					Message: fmt.Sprintf("file %s not found in repo %s", path, repo),
+				},
+			}, nil
+		}
+		return &connector.ConnectorResult{
+			Status: connector.StatusTerminalError,
+			Error: &connector.ConnectorError{
+				Code:    "READ_FILE_FAILED",
+				Message: fmt.Sprintf("failed to read file: %v", err),
+			},
+		}, nil
+	}
+
+	content, err := fileContent.GetContent()
+	if err != nil {
+		return &connector.ConnectorResult{
+			Status: connector.StatusTerminalError,
+			Error: &connector.ConnectorError{
+				Code:    "CONTENT_DECODE_FAILED",
+				Message: fmt.Sprintf("failed to decode file content: %v", err),
+			},
+		}, nil
+	}
+
+	return &connector.ConnectorResult{
+		Status: connector.StatusSuccess,
+		Output: map[string]interface{}{
+			"content": content,
+			"sha":     fileContent.GetSHA(),
+		},
+	}, nil
+}
+
+// Helper function to split repo string "owner/name" into [owner, name]
+func splitRepo(repo string) []string {
+	parts := strings.Split(repo, "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return nil
+	}
+	return parts
+}
+
 func (c *GitHubConnector) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -228,5 +464,7 @@ func (c *GitHubConnector) Operations() []connector.OperationMeta {
 		{Name: "create_pull_request", IsAsync: false},
 		{Name: "add_repository_collaborator", IsAsync: false},
 		{Name: "create_repository_webhook", IsAsync: false},
+		{Name: "commit_files", IsAsync: false},
+		{Name: "read_file", IsAsync: false},
 	}
 }

@@ -11,14 +11,16 @@ import (
 
 func TestCrossplaneValidatorHappyPath(t *testing.T) {
 	validator := NewCrossplaneValidator()
-	manifest := []byte(`apiVersion: v1
-kind: Config
+	manifest := []byte(`apiVersion: infrastructure.platform.io/v1alpha1
+kind: XKubernetesCluster
 metadata:
   name: test
   labels:
-    tenant: demo
+    platform.io/tenant: demo
 spec:
-  size: small
+  parameters:
+    region: eu-west-1
+    version: "1.30"
 `)
 	require.NoError(t, validator.ValidateYAML(manifest))
 }
@@ -41,7 +43,7 @@ kind: Config
 metadata:
   name: golden
   labels:
-    tenant: demo
+    platform.io/tenant: demo
 spec:
   size: epic
 `)

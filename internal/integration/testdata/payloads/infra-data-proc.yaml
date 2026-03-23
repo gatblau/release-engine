@@ -4,8 +4,7 @@ tenant: analytics
 owner: data-platform
 environment: production
 workload_profile: large
-template_name: data-proc
-composition_ref: composition-data-proc-v1
+catalogue_item: data-proc
 namespace: platform-system
 residency: eu
 primary_region: eu-west-1
@@ -16,6 +15,7 @@ ingress_mode: private
 egress_mode: nat
 dr_required: true
 backup_required: true
+cost_centre: cost-center-456
 kubernetes:
   enabled: true
   tier: advanced

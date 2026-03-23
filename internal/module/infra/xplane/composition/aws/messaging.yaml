@@ -1,0 +1,117 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: messaging-aws
+  labels:
+    provider: aws
+spec:
+  compositeTypeRef:
+    apiVersion: infrastructure.platform.io/v1alpha1
+    kind: XMessaging
+  mode: Pipeline
+  pipeline:
+    - step: render
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- $xr := .observed.composite.resource }}
+            {{- $params := $xr.spec.parameters }}
+            {{- $observed := .observed.resources }}
+            {{- $fifoSuffix := "" }}
+            {{- if $params.fifo }}{{ $fifoSuffix = ".fifo" }}{{ end }}
+
+            {{- /* DLQs first — main queues may depend on their observed ARN */ -}}
+            {{- if $params.dlqEnabled }}
+            {{- range $i := until ($params.queueCount | int) }}
+            ---
+            apiVersion: sqs.aws.m.upbound.io/v1beta1
+            kind: Queue
+            metadata:
+              namespace: {{ $xr.metadata.namespace }}
+              name: {{ $xr.metadata.name }}-dlq-{{ $i }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: dlq-{{ $i }}
+              labels:
+                queue-role: dlq
+                queue-index: {{ $i | quote }}
+            spec:
+              providerConfigRef:
+                name: {{ $params.providerConfigRef | default "aws-provider" }}
+                kind: ClusterProviderConfig
+              forProvider:
+                region: {{ $params.region }}
+                name: {{ $xr.metadata.name }}-dlq-{{ $i }}{{ $fifoSuffix }}
+                fifoQueue: {{ $params.fifo | default false }}
+                sqsManagedSseEnabled: {{ $params.encryption | default true }}
+                messageRetentionSeconds: 1209600
+            {{- end }}
+            {{- end }}
+
+            {{- /* Main queues */ -}}
+            {{- range $i := until ($params.queueCount | int) }}
+            ---
+            apiVersion: sqs.aws.m.upbound.io/v1beta1
+            kind: Queue
+            metadata:
+              namespace: {{ $xr.metadata.namespace }}
+              name: {{ $xr.metadata.name }}-queue-{{ $i }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: queue-{{ $i }}
+              labels:
+                queue-role: main
+                queue-index: {{ $i | quote }}
+            spec:
+              providerConfigRef:
+                name: {{ $params.providerConfigRef | default "aws-provider" }}
+                kind: ClusterProviderConfig
+              forProvider:
+                region: {{ $params.region }}
+                name: {{ $xr.metadata.name }}-queue-{{ $i }}{{ $fifoSuffix }}
+                fifoQueue: {{ $params.fifo | default false }}
+                sqsManagedSseEnabled: {{ $params.encryption | default true }}
+                visibilityTimeoutSeconds: 30
+                messageRetentionSeconds: 345600
+                {{- if $params.dlqEnabled }}
+                {{- $dlqKey := printf "dlq-%d" $i }}
+                {{- $dlqResource := index $observed $dlqKey }}
+                {{- if and $dlqResource $dlqResource.resource.status.atProvider.arn }}
+                redrivePolicy: |
+                  {
+                    "deadLetterTargetArn": "{{ $dlqResource.resource.status.atProvider.arn }}",
+                    "maxReceiveCount": {{ $params.dlqMaxRetry | default 3 }}
+                  }
+                {{- end }}
+                {{- end }}
+            {{- end }}
+
+            {{- /* Topics */ -}}
+            {{- range $i := until ($params.topicCount | int) }}
+            ---
+            apiVersion: sns.aws.m.upbound.io/v1beta1
+            kind: Topic
+            metadata:
+              namespace: {{ $xr.metadata.namespace }}
+              name: {{ $xr.metadata.name }}-topic-{{ $i }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: topic-{{ $i }}
+            spec:
+              providerConfigRef:
+                name: {{ $params.providerConfigRef | default "aws-provider" }}
+                kind: ClusterProviderConfig
+              forProvider:
+                region: {{ $params.region }}
+                name: {{ $xr.metadata.name }}-topic-{{ $i }}{{ $fifoSuffix }}
+                fifoTopic: {{ $params.fifo | default false }}
+                {{- if $params.encryption }}
+                kmsMasterKeyId: alias/aws/sns
+                {{- end }}
+            {{- end }}
+
+    - step: detect-readiness
+      functionRef:
+        name: function-auto-ready

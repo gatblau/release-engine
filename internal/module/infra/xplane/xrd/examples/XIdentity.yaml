@@ -1,0 +1,37 @@
+# Service role for Lambda
+apiVersion: infrastructure.platform.io/v1alpha1
+kind: XIdentity
+metadata:
+  name: order-processor-role
+  namespace: team-alpha
+spec:
+  compositionRef:
+    name: xidentity-aws-role
+  parameters:
+    type: service
+    servicePrincipal: lambda.amazonaws.com
+    managedPolicies:
+      - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      - arn:aws:iam::aws:policy/AmazonDynamoDBReadOnlyAccess
+    tags:
+      team: alpha
+---
+# IRSA role for EKS pod
+apiVersion: infrastructure.platform.io/v1alpha1
+kind: XIdentity
+metadata:
+  name: payment-service-irsa
+  namespace: team-alpha
+spec:
+  compositionRef:
+    name: xidentity-aws-role
+  parameters:
+    type: irsa
+    oidc:
+      issuerUrl: https://oidc.eks.us-east-1.amazonaws.com/id/ABCDEF123456
+      namespace: payments
+      serviceAccount: payment-service
+    managedPolicies:
+      - arn:aws:iam::123456789012:policy/payment-s3-access
+    tags:
+      team: alpha

@@ -1,0 +1,407 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: xkubernetescluster-aws-eks
+  labels:
+    provider: aws
+    service: eks
+spec:
+  compositeTypeRef:
+    apiVersion: infrastructure.platform.io/v1alpha1
+    kind: XKubernetesCluster
+
+  mode: Pipeline
+  pipeline:
+    - step: render
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- $xr := .observed.composite.resource }}
+            {{- $spec := $xr.spec.parameters }}
+            {{- $name := $xr.metadata.name }}
+            {{- $clusterName := default $name $spec.clusterName }}
+            {{- $region := $spec.region }}
+            {{- $version := $spec.version }}
+            {{- $providerConfigName := default "aws-provider" $spec.providerConfigRef }}
+            {{- $publicAccess := default false $spec.publicAccess }}
+            {{- $privateAccess := true }}
+            {{- $enableOIDC := default true $spec.enableOIDC }}
+            {{- $tags := default dict $spec.tags }}
+
+            {{/* --- Node pool defaults --- */}}
+            {{- $nodePool := default dict $spec.nodePool }}
+            {{- $instanceType := default "m5.large" $nodePool.instanceType }}
+            {{- $minNodes := default 1 $nodePool.minNodes }}
+            {{- $maxNodes := default 3 $nodePool.maxNodes }}
+            {{- $desiredNodes := default 2 $nodePool.desiredNodes }}
+            {{- $diskSizeGb := default 50 $nodePool.diskSizeGb }}
+            {{- $capacityType := default "ON_DEMAND" $nodePool.capacityType }}
+
+            {{/* --- Standard managed policy ARNs for node role --- */}}
+            {{- $nodePolicies := list
+                "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy"
+                "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPullOnly"
+                "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"
+            }}
+
+            {{/* --- Standard addons --- */}}
+            {{- $addons := list "vpc-cni" "coredns" "kube-proxy" }}
+
+            {{/* ============================================================
+                 CLUSTER IAM ROLE
+                 ============================================================ */}}
+            ---
+            apiVersion: iam.aws.upbound.io/v1beta1
+            kind: Role
+            metadata:
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: cluster-role
+              labels:
+                role: cluster
+            spec:
+              deletionPolicy: Delete
+              providerConfigRef:
+                name: {{ $providerConfigName }}
+              forProvider:
+                assumeRolePolicy: |
+                  {
+                    "Version": "2012-10-17",
+                    "Statement": [{
+                      "Effect": "Allow",
+                      "Principal": {"Service": "eks.amazonaws.com"},
+                      "Action": "sts:AssumeRole"
+                    }]
+                  }
+                tags:
+                {{- range $k, $v := $tags }}
+                  {{ $k }}: {{ $v | quote }}
+                {{- end }}
+                  managed-by: crossplane
+                  cluster: {{ $clusterName }}
+
+            ---
+            apiVersion: iam.aws.upbound.io/v1beta1
+            kind: RolePolicyAttachment
+            metadata:
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: cluster-policy-eks
+            spec:
+              deletionPolicy: Delete
+              providerConfigRef:
+                name: {{ $providerConfigName }}
+              forProvider:
+                policyArn: arn:aws:iam::aws:policy/AmazonEKSClusterPolicy
+                roleSelector:
+                  matchControllerRef: true
+                  matchLabels:
+                    role: cluster
+
+            ---
+            apiVersion: iam.aws.upbound.io/v1beta1
+            kind: RolePolicyAttachment
+            metadata:
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: cluster-policy-vpc
+            spec:
+              deletionPolicy: Delete
+              providerConfigRef:
+                name: {{ $providerConfigName }}
+              forProvider:
+                policyArn: arn:aws:iam::aws:policy/AmazonEKSVPCResourceController
+                roleSelector:
+                  matchControllerRef: true
+                  matchLabels:
+                    role: cluster
+
+            {{/* ============================================================
+                 EKS CLUSTER
+                 ============================================================ */}}
+            ---
+            apiVersion: eks.aws.upbound.io/v1beta2
+            kind: Cluster
+            metadata:
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: eks-cluster
+              labels:
+                cluster: {{ $clusterName }}
+            spec:
+              deletionPolicy: Delete
+              providerConfigRef:
+                name: {{ $providerConfigName }}
+              forProvider:
+                region: {{ $region }}
+                version: {{ $version | quote }}
+                roleArnSelector:
+                  matchControllerRef: true
+                  matchLabels:
+                    role: cluster
+                accessConfig:
+                  authenticationMode: API_AND_CONFIG_MAP
+                vpcConfig:
+                  - endpointPublicAccess: {{ $publicAccess }}
+                    endpointPrivateAccess: {{ $privateAccess }}
+                    subnetIds:
+                    {{- range $subnet := $spec.subnetIds }}
+                      - {{ $subnet }}
+                    {{- end }}
+                    {{- if $spec.securityGroupIds }}
+                    securityGroupIds:
+                    {{- range $sg := $spec.securityGroupIds }}
+                      - {{ $sg }}
+                    {{- end }}
+                    {{- end }}
+                tags:
+                {{- range $k, $v := $tags }}
+                  {{ $k }}: {{ $v | quote }}
+                {{- end }}
+                  managed-by: crossplane
+
+            {{/* ============================================================
+                 OIDC PROVIDER (conditional)
+                 ============================================================ */}}
+            {{- if $enableOIDC }}
+            {{- $cluster := index .observed.resources "eks-cluster" }}
+            {{- if and $cluster $cluster.resource $cluster.resource.status $cluster.resource.status.atProvider }}
+            {{- $oidcIssuer := "" }}
+            {{- with $cluster.resource.status.atProvider.identity }}
+            {{- with (index . 0) }}
+            {{- with .oidc }}
+            {{- with (index . 0) }}
+            {{- $oidcIssuer = .issuer }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- if $oidcIssuer }}
+            ---
+            apiVersion: iam.aws.upbound.io/v1beta1
+            kind: OpenIDConnectProvider
+            metadata:
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: oidc-provider
+            spec:
+              deletionPolicy: Delete
+              providerConfigRef:
+                name: {{ $providerConfigName }}
+              forProvider:
+                url: {{ $oidcIssuer }}
+                clientIdList:
+                  - sts.amazonaws.com
+                thumbprintList:
+                  - "9e99a48a9960b14926bb7f3b02e22da2b0ab7280"
+                tags:
+                {{- range $k, $v := $tags }}
+                  {{ $k }}: {{ $v | quote }}
+                {{- end }}
+                  managed-by: crossplane
+                  cluster: {{ $clusterName }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
+
+            {{/* ============================================================
+                 NODE IAM ROLE
+                 ============================================================ */}}
+            ---
+            apiVersion: iam.aws.upbound.io/v1beta1
+            kind: Role
+            metadata:
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: node-role
+              labels:
+                role: node
+            spec:
+              deletionPolicy: Delete
+              providerConfigRef:
+                name: {{ $providerConfigName }}
+              forProvider:
+                assumeRolePolicy: |
+                  {
+                    "Version": "2012-10-17",
+                    "Statement": [{
+                      "Effect": "Allow",
+                      "Principal": {"Service": "ec2.amazonaws.com"},
+                      "Action": "sts:AssumeRole"
+                    }]
+                  }
+                tags:
+                {{- range $k, $v := $tags }}
+                  {{ $k }}: {{ $v | quote }}
+                {{- end }}
+                  managed-by: crossplane
+                  cluster: {{ $clusterName }}
+
+            {{- range $i, $policyArn := $nodePolicies }}
+            ---
+            apiVersion: iam.aws.upbound.io/v1beta1
+            kind: RolePolicyAttachment
+            metadata:
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: {{ printf "node-policy-%d" $i }}
+            spec:
+              deletionPolicy: Delete
+              providerConfigRef:
+                name: {{ $providerConfigName }}
+              forProvider:
+                policyArn: {{ $policyArn }}
+                roleSelector:
+                  matchControllerRef: true
+                  matchLabels:
+                    role: node
+            {{- end }}
+
+            {{/* ============================================================
+                 NODE GROUP (single opinionated pool)
+                 ============================================================ */}}
+            ---
+            apiVersion: eks.aws.upbound.io/v1beta2
+            kind: NodeGroup
+            metadata:
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: default-node-group
+            spec:
+              deletionPolicy: Delete
+              providerConfigRef:
+                name: {{ $providerConfigName }}
+              forProvider:
+                region: {{ $region }}
+                clusterNameSelector:
+                  matchControllerRef: true
+                  matchLabels:
+                    cluster: {{ $clusterName }}
+                nodeRoleArnSelector:
+                  matchControllerRef: true
+                  matchLabels:
+                    role: node
+                subnetIds:
+                {{- range $subnet := $spec.subnetIds }}
+                  - {{ $subnet }}
+                {{- end }}
+                instanceTypes:
+                  - {{ $instanceType }}
+                capacityType: {{ $capacityType }}
+                diskSize: {{ $diskSizeGb }}
+                scalingConfig:
+                  - minSize: {{ $minNodes }}
+                    maxSize: {{ $maxNodes }}
+                    desiredSize: {{ $desiredNodes }}
+                amiType: AL2_x86_64
+                tags:
+                {{- range $k, $v := $tags }}
+                  {{ $k }}: {{ $v | quote }}
+                {{- end }}
+                  managed-by: crossplane
+                  cluster: {{ $clusterName }}
+
+            {{/* ============================================================
+                 STANDARD ADDONS
+                 ============================================================ */}}
+            {{- range $addon := $addons }}
+            ---
+            apiVersion: eks.aws.upbound.io/v1beta1
+            kind: Addon
+            metadata:
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: {{ printf "addon-%s" $addon }}
+            spec:
+              deletionPolicy: Delete
+              providerConfigRef:
+                name: {{ $providerConfigName }}
+              forProvider:
+                region: {{ $region }}
+                clusterNameSelector:
+                  matchControllerRef: true
+                  matchLabels:
+                    cluster: {{ $clusterName }}
+                addonName: {{ $addon }}
+                resolveConflictsOnCreate: OVERWRITE
+                resolveConflictsOnUpdate: OVERWRITE
+            {{- end }}
+
+            {{/* ============================================================
+                 ADMIN ACCESS (conditional)
+                 ============================================================ */}}
+            {{- if $spec.adminPrincipalArn }}
+            ---
+            apiVersion: eks.aws.upbound.io/v1beta1
+            kind: AccessEntry
+            metadata:
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: admin-access-entry
+            spec:
+              deletionPolicy: Delete
+              providerConfigRef:
+                name: {{ $providerConfigName }}
+              forProvider:
+                region: {{ $region }}
+                clusterNameSelector:
+                  matchControllerRef: true
+                  matchLabels:
+                    cluster: {{ $clusterName }}
+                principalArn: {{ $spec.adminPrincipalArn }}
+                type: STANDARD
+
+            ---
+            apiVersion: eks.aws.upbound.io/v1beta1
+            kind: AccessPolicyAssociation
+            metadata:
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: admin-access-policy
+            spec:
+              deletionPolicy: Delete
+              providerConfigRef:
+                name: {{ $providerConfigName }}
+              forProvider:
+                region: {{ $region }}
+                clusterNameSelector:
+                  matchControllerRef: true
+                  matchLabels:
+                    cluster: {{ $clusterName }}
+                principalArn: {{ $spec.adminPrincipalArn }}
+                policyArn: arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy
+                accessScope:
+                  - type: cluster
+            {{- end }}
+
+            {{/* ============================================================
+                 OVERRIDES PASSTHROUGH (escape hatch)
+                 ============================================================ */}}
+            {{/* Overrides are consumed by a separate composition function
+                 or patched via function-patch-and-transform if needed.
+                 The go-templating step does not act on them directly. */}}
+
+            {{/* ============================================================
+                 STATUS PROPAGATION
+                 ============================================================ */}}
+            ---
+            apiVersion: infrastructure.platform.io/v1alpha1
+            kind: XKubernetesCluster
+            metadata:
+              name: {{ $xr.metadata.name }}
+            status:
+              clusterName: {{ $clusterName }}
+              {{- $clusterRes := index .observed.resources "eks-cluster" }}
+              {{- if and $clusterRes $clusterRes.resource $clusterRes.resource.status $clusterRes.resource.status.atProvider }}
+              {{- with $clusterRes.resource.status.atProvider.identity }}
+              {{- with (index . 0) }}
+              {{- with .oidc }}
+              {{- with (index . 0) }}
+              oidcIssuer: {{ .issuer }}
+              {{- end }}
+              {{- end }}
+              {{- end }}
+              {{- end }}
+              {{- end }}
+              {{- $nodeRoleRes := index .observed.resources "node-role" }}
+              {{- if and $nodeRoleRes $nodeRoleRes.resource $nodeRoleRes.resource.status $nodeRoleRes.resource.status.atProvider }}
+              nodeRoleArn: {{ $nodeRoleRes.resource.status.atProvider.arn }}
+              {{- end }}
+
+    - step: ready
+      functionRef:
+        name: function-auto-ready

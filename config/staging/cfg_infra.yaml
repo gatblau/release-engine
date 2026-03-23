@@ -1,0 +1,15 @@
+# cfg_infra.yaml - Staging environment
+apiVersion: module.config/v1
+module: infra
+
+# Staging environment variables (production-like but with safety margins)
+vars:
+  health_timeout: 300s  # 5 minutes
+  poll_interval: 30s    # 30 seconds
+
+# Staging connector implementations (real connectors but to staging endpoints)
+connectors:
+  families:
+    git: github     # Real GitHub API for staging repos
+    policy: opa     # Real OPA policy service
+    webhook: http   # Real webhook service

@@ -23,6 +23,14 @@ func (suite *FileGitContractTestSuite) SetupTest() {
 	conn, err := NewFileGitConnector(tempDir)
 	suite.Require().NoError(err)
 	suite.Connector = conn
+
+	// Create the repository first (git‑like semantics: push requires an existing repo)
+	_, err = conn.Execute(context.Background(), "create_repository", map[string]interface{}{
+		"repo_path": "tenant/test-app",
+	})
+	suite.Require().NoError(err)
+
+	// Now push_files can be tested as a valid operation
 	suite.ValidOperation = "push_files"
 	suite.ValidInput = map[string]interface{}{
 		"repo_path": "tenant/test-app",

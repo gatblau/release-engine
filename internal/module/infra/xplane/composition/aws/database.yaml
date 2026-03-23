@@ -1,0 +1,92 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: database-aws
+  labels:
+    provider: aws
+spec:
+  compositeTypeRef:
+    apiVersion: infrastructure.platform.io/v1alpha1
+    kind: XDatabase
+  mode: Pipeline
+  pipeline:
+    - step: render
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- $xr := .observed.composite.resource -}}
+            {{- $spec := $xr.spec -}}
+
+            ---
+            apiVersion: rds.aws.m.upbound.io/v1beta1
+            kind: Instance
+            metadata:
+              namespace: {{ $xr.metadata.namespace }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: rds-instance
+                crossplane.io/external-name: {{ printf "%s-db" $xr.metadata.name | quote }}
+            spec:
+              providerConfigRef:
+                name: {{ $spec.providerConfigRef | quote }}
+              forProvider:
+                region: {{ $spec.region | quote }}
+                engine: {{ $spec.engine | quote }}
+                instanceClass: {{ $spec.instanceClass | quote }}
+                allocatedStorage: {{ $spec.allocatedStorage }}
+                storageType: {{ $spec.storageType | quote }}
+                multiAz: {{ $spec.multiAZ }}
+                publiclyAccessible: false
+                storageEncrypted: true
+                autoMinorVersionUpgrade: true
+                backupRetentionPeriod: {{ $spec.backupRetentionDays }}
+                skipFinalSnapshot: false
+                deletionProtection: true
+            {{- with $spec.engineVersion }}
+                engineVersion: {{ . | quote }}
+            {{- end }}
+            {{- with $spec.iops }}
+                iops: {{ . }}
+            {{- end }}
+            {{- with $spec.parameterGroup }}
+                parameterGroupName: {{ . | quote }}
+            {{- end }}
+            {{- with $spec.maintenanceWindow }}
+                maintenanceWindow: {{ . | quote }}
+            {{- end }}
+            {{- with $spec.subnetGroupName }}
+                dbSubnetGroupName: {{ . | quote }}
+            {{- end }}
+            {{- with $spec.securityGroupIds }}
+                vpcSecurityGroupIds:
+            {{ toYaml . | nindent 6 }}
+            {{- end }}
+
+            ---
+            apiVersion: infrastructure.platform.io/v1alpha1
+            kind: XDatabase
+            status:
+            {{- if and .observed.resources (hasKey .observed.resources "rds-instance") }}
+              {{- $db := (index .observed.resources "rds-instance").resource }}
+              {{- if $db.status.atProvider }}
+              {{- with $db.status.atProvider.endpoint }}
+                endpoint: {{ . | quote }}
+              {{- end }}
+              {{- with $db.status.atProvider.port }}
+                port: {{ . }}
+              {{- end }}
+              {{- with $db.status.atProvider.resourceId }}
+                resourceId: {{ . | quote }}
+              {{- end }}
+              {{- end }}
+            {{- else }}
+              {}
+            {{- end }}
+
+    - step: automatically-detect-ready-composed-resources
+      functionRef:
+        name: function-auto-ready

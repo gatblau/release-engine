@@ -4,8 +4,7 @@ tenant: payments
 owner: platform-team
 environment: production
 workload_profile: medium
-template_name: k8s-app
-composition_ref: composition-k8s-application-v1
+catalogue_item: k8s-app
 namespace: platform-system
 residency: eu
 primary_region: eu-west-1
@@ -16,6 +15,7 @@ ingress_mode: public
 egress_mode: nat
 dr_required: true
 backup_required: true
+cost_centre: cost-center-123
 kubernetes:
   enabled: true
   tier: standard

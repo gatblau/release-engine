@@ -1,0 +1,33 @@
+apiVersion: infrastructure.platform.io/v1alpha1
+kind: XKubernetesCluster
+metadata:
+    annotations:
+        platform.io/composition-ref: kubernetes-aws
+        platform.io/contract-version: v1
+    labels:
+        app.kubernetes.io/managed-by: release-engine
+        platform.io/catalogue-item: k8s-app
+        platform.io/environment: production
+        platform.io/tenant: payments
+    name: checkout-prod-kubernetes
+    namespace: platform-system
+spec:
+    compositionRef:
+        name: kubernetes-aws
+    parameters:
+        clusterName: checkout-prod-k8s
+        enableOIDC: true
+        nodePool:
+            capacityType: ON_DEMAND
+            desiredNodes: 2
+            diskSizeGb: 50
+            instanceType: m7.xlarge
+            maxNodes: 10
+            minNodes: 3
+        providerConfigRef: aws-provider
+        publicAccess: false
+        region: eu-west-1
+        securityGroupIds: []
+        subnetIds: []
+        tags: {}
+        version: "1.30"

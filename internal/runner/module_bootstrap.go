@@ -1,15 +1,82 @@
 package runner
 
 import (
+	"context"
+	"os"
+
+	"github.com/gatblau/release-engine/internal/connector"
+	"github.com/gatblau/release-engine/internal/module/config"
 	"github.com/gatblau/release-engine/internal/module/infra"
 	"github.com/gatblau/release-engine/internal/registry"
 )
 
 // NewDefaultModuleRegistry builds a module registry with built-in modules.
+// This is the legacy assembly path that will be used for non-config-managed modules.
 func NewDefaultModuleRegistry() (registry.ModuleRegistry, error) {
 	reg := registry.NewModuleRegistry()
 	if err := infra.Register(reg); err != nil {
 		return nil, err
 	}
 	return reg, nil
+}
+
+// NewConfigAwareModuleResolver creates a module resolver that supports both
+// config-managed and legacy module assembly paths.
+func NewConfigAwareModuleResolver(connRegistry connector.TypedConnectorRegistry) (*Resolver, error) {
+	// Create config loader with default base path
+	defaultBasePath := "."
+	if cfgRoot := os.Getenv("CFG_ROOT"); cfgRoot != "" {
+		defaultBasePath = cfgRoot
+	}
+	configLoader := config.NewLoader(defaultBasePath)
+
+	// Create legacy registry for backward compatibility
+	legacyRegistry, err := NewDefaultModuleRegistry()
+	if err != nil {
+		return nil, err
+	}
+
+	return NewResolver(configLoader, connRegistry, legacyRegistry), nil
+}
+
+// BootstrapWithConfig loads and assembles modules using config-aware resolution.
+// This is the new entry point for framework bootstrap that supports config-managed modules.
+func BootstrapWithConfig(ctx context.Context, connRegistry connector.TypedConnectorRegistry) (registry.ModuleRegistry, error) {
+	resolver, err := NewConfigAwareModuleResolver(connRegistry)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create a dynamic registry that uses the resolver
+	return &dynamicModuleRegistry{
+		resolver: resolver,
+		modules:  make(map[string]registry.Module),
+	}, nil
+}
+
+// dynamicModuleRegistry implements registry.ModuleRegistry but resolves modules
+// on-demand using the config-aware resolver.
+type dynamicModuleRegistry struct {
+	resolver *Resolver
+	modules  map[string]registry.Module
+}
+
+func (r *dynamicModuleRegistry) Register(m registry.Module) error {
+	// For dynamic registry, we don't support direct registration
+	// Modules are resolved on-demand via ResolveModule
+	return nil
+}
+
+func (r *dynamicModuleRegistry) Lookup(key, version string) (registry.Module, bool) {
+	// Try to resolve the module using the resolver
+	module, err := r.resolver.ResolveModule(context.Background(), key, version)
+	if err != nil {
+		return nil, false
+	}
+
+	// Cache the resolved module
+	cacheKey := key + ":" + version
+	r.modules[cacheKey] = module
+
+	return module, true
 }

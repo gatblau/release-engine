@@ -3,6 +3,6 @@ kind: Config
 metadata:
   name: golden
   labels:
-    tenant: demo
+    platform.io/tenant: demo
 spec:
   size: epic

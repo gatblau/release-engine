@@ -1,0 +1,59 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: observability-aws
+  labels:
+    provider: aws
+spec:
+  compositeTypeRef:
+    apiVersion: infrastructure.platform.io/v1alpha1
+    kind: XObservability
+  mode: Pipeline
+  pipeline:
+    - step: render
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- $xr := getCompositeResource . -}}
+            {{- $xrName := $xr.metadata.name -}}
+            {{- $xrNamespace := $xr.metadata.namespace -}}
+            {{- $params := $xr.spec.parameters | default dict -}}
+            {{- $region := $params.region | default "eu-west-1" -}}
+            {{- $providerConfigRef := $params.providerConfigRef | default "aws-provider" -}}
+            {{- $logRetentionDays := $params.logRetentionDays | default 90 -}}
+            {{- $logGroupName := printf "/platform/%s" $xrName -}}
+
+            ---
+            apiVersion: cloudwatchlogs.aws.m.upbound.io/v1beta1
+            kind: Group
+            metadata:
+              namespace: {{ $xrNamespace }}
+              annotations:
+                {{ setResourceNameAnnotation "log-group" }}
+                crossplane.io/external-name: {{ $logGroupName }}
+            spec:
+              providerConfigRef:
+                name: {{ $providerConfigRef }}
+              forProvider:
+                region: {{ $region }}
+                name: {{ $logGroupName }}
+                retentionInDays: {{ $logRetentionDays }}
+
+            ---
+            {{- $logGroup := getComposedResource . "log-group" -}}
+            apiVersion: infrastructure.platform.io/v1alpha1
+            kind: XObservability
+            status:
+              {{- if $logGroup }}
+              logGroupArn: {{ dig "resource" "status" "atProvider" "arn" "" $logGroup }}
+              {{- else }}
+              logGroupArn: ""
+              {{- end }}
+    - step: auto-ready
+      functionRef:
+        name: function-auto-ready

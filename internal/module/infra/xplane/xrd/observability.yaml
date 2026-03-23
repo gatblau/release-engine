@@ -1,0 +1,41 @@
+apiVersion: apiextensions.crossplane.io/v2
+kind: CompositeResourceDefinition
+metadata:
+  name: xobservabilities.infrastructure.platform.io
+spec:
+  scope: Namespaced
+  defaultCompositionRef:
+    name: observability-aws
+  group: infrastructure.platform.io
+  names:
+    kind: XObservability
+    plural: xobservabilities
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                parameters:
+                  type: object
+                  default: {}
+                  properties:
+                    region:
+                      type: string
+                      default: eu-west-1
+                    providerConfigRef:
+                      type: string
+                      default: aws-provider
+                    logRetentionDays:
+                      type: integer
+                      default: 90
+            status:
+              type: object
+              properties:
+                logGroupArn:
+                  type: string

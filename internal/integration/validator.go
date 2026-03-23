@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/require"
@@ -24,6 +25,52 @@ var updateGolden = flag.Bool("update-golden", false, "update golden files with g
 // CrossplaneValidator validates Crossplane definitions emitted by modules.
 type CrossplaneValidator struct {
 	rules []ValidatorRule
+}
+
+var xrdParameterContracts = map[string]struct {
+	Required []string
+	Allowed  map[string]struct{}
+}{
+	"XCache": {
+		Required: []string{"engine", "region"},
+		Allowed:  toSet([]string{"region", "providerConfigRef", "engine", "nodeType", "engineVersion", "replicaCount", "snapshotRetentionDays", "subnetGroupName", "securityGroupIds"}),
+	},
+	"XDatabase": {
+		Required: []string{"engine", "region"},
+		Allowed:  toSet([]string{"region", "providerConfigRef", "engine", "engineVersion", "instanceClass", "allocatedStorage", "storageType", "iops", "multiAZ", "readReplicas", "backupRetentionDays", "pointInTimeRecovery", "parameterGroup", "maintenanceWindow", "subnetGroupName", "securityGroupIds"}),
+	},
+	"XDNSZone": {
+		Required: []string{"region", "zoneName"},
+		Allowed:  toSet([]string{"providerConfigRef", "region", "zoneName", "private", "vpcId", "records"}),
+	},
+	"XKubernetesCluster": {
+		Required: []string{"region", "version"},
+		Allowed:  toSet([]string{"region", "version", "providerConfigRef", "clusterRoleArn", "nodeRoleArn", "subnetIds", "securityGroupIds", "nodePool"}),
+	},
+	"XLoadBalancer": {
+		Required: []string{"region", "vpcId", "subnetIds"},
+		Allowed:  toSet([]string{"providerConfigRef", "region", "type", "scheme", "idleTimeout", "vpcId", "subnetIds", "securityGroupIds", "https", "certificateArn", "waf", "wafAclArn", "healthCheck"}),
+	},
+	"XMessaging": {
+		Required: []string{"region"},
+		Allowed:  toSet([]string{"providerConfigRef", "region", "queueCount", "topicCount", "fifo", "encryption", "dlqEnabled", "dlqMaxRetry"}),
+	},
+	"XObjectStore": {
+		Required: []string{"region"},
+		Allowed:  toSet([]string{"region", "providerConfigRef", "versioning", "retentionDays", "encryption"}),
+	},
+	"XObservability": {
+		Required: []string{"region"},
+		Allowed:  toSet([]string{"region", "providerConfigRef", "metricsRetentionDays", "logRetentionDays", "logSinkType", "tracingEnabled", "tracingSampleRate", "dashboardEnabled"}),
+	},
+	"XSecretsStore": {
+		Required: []string{"region"},
+		Allowed:  toSet([]string{"region", "providerConfigRef", "kmsKeyType", "kmsRotationDays", "secretCount", "autoRotation", "rotationIntervalDays"}),
+	},
+	"XVPCNetwork": {
+		Required: []string{"cidr", "region"},
+		Allowed:  toSet([]string{"region", "providerConfigRef", "cidr", "privateSubnets", "publicSubnets", "natGateways", "flowLogs", "availabilityZones"}),
+	},
 }
 
 // ValidatorRule performs validation on a decoded object.
@@ -39,6 +86,7 @@ func NewCrossplaneValidator(rules ...ValidatorRule) *CrossplaneValidator {
 			FieldPresenceRule{fields: []string{"apiVersion", "kind", "metadata", "spec"}},
 			MetadataRule{},
 			SpecRule{},
+			XRDContractRule{},
 		}
 	}
 	return &CrossplaneValidator{rules: rules}
@@ -111,8 +159,8 @@ func (MetadataRule) Validate(obj map[string]any) error {
 	if !ok {
 		return fmt.Errorf("metadata.labels must be defined")
 	}
-	if _, ok := labels["tenant"]; !ok {
-		return fmt.Errorf("metadata.labels must include tenant")
+	if _, ok := labels["platform.io/tenant"]; !ok {
+		return fmt.Errorf("metadata.labels must include platform.io/tenant")
 	}
 	return nil
 }
@@ -133,19 +181,106 @@ func (SpecRule) Validate(obj map[string]any) error {
 	return nil
 }
 
+// XRDContractRule validates known kind contracts against documented XRD schemas.
+type XRDContractRule struct{}
+
+func (XRDContractRule) Name() string { return "XRDContract" }
+
+func (XRDContractRule) Validate(obj map[string]any) error {
+	kind, _ := obj["kind"].(string)
+	contract, ok := xrdParameterContracts[kind]
+	if !ok {
+		return nil
+	}
+	spec, _ := obj["spec"].(map[string]any)
+	params, ok := spec["parameters"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("spec.parameters must be an object")
+	}
+	for _, req := range contract.Required {
+		if _, ok := params[req]; !ok {
+			return fmt.Errorf("spec.parameters.%s is required for kind %s", req, kind)
+		}
+	}
+	for k := range params {
+		if _, ok := contract.Allowed[k]; !ok {
+			return fmt.Errorf("spec.parameters.%s is not allowed for kind %s", k, kind)
+		}
+	}
+	return nil
+}
+
+func toSet(keys []string) map[string]struct{} {
+	m := make(map[string]struct{}, len(keys))
+	for _, k := range keys {
+		m[k] = struct{}{}
+	}
+	return m
+}
+
 // AssertGoldenYAML compares output against a golden file and optionally overwrites it.
 func AssertGoldenYAML(t testing.TB, name string, actual []byte) {
 	t.Helper()
-	base := filepath.Join("testdata", "golden")
-	path := filepath.Join(base, fmt.Sprintf("%s.yaml", name))
-	if *updateGolden {
-		require.NoError(t, os.MkdirAll(base, 0o755))
-		require.NoError(t, os.WriteFile(path, actual, 0o644))
+
+	// Validate name to prevent path traversal attacks.
+	if !isValidGoldenName(name) {
+		require.Failf(t, "invalid golden file name", "name %q must contain only alphanumeric characters, hyphens, and underscores", name)
 		return
 	}
-	expected, err := os.ReadFile(path)
+
+	base := filepath.Join("testdata", "golden")
+
+	// Use os.Root to scope all file access under the fixed base directory (Go >= 1.24).
+	root, err := os.OpenRoot(base)
 	require.NoError(t, err)
+	defer func(root *os.Root) {
+		if err = root.Close(); err != nil {
+			t.Fatalf("failed to close root file: %v", err)
+		}
+	}(root)
+
+	fileName := fmt.Sprintf("%s.yaml", name)
+
+	if *updateGolden {
+		require.NoError(t, os.MkdirAll(base, 0o750))
+		f, err := root.OpenFile(fileName, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+		require.NoError(t, err)
+		defer func(f *os.File) {
+			if err = f.Close(); err != nil {
+				t.Fatalf("failed to close file %s: %v", fileName, err)
+			}
+		}(f)
+		_, err = f.Write(actual)
+		require.NoError(t, err)
+		return
+	}
+
+	f, err := root.Open(fileName)
+	require.NoError(t, err)
+	defer func(f *os.File) {
+		if err = f.Close(); err != nil {
+			t.Fatalf("failed to close file %s: %v", fileName, err)
+		}
+	}(f)
+
+	expected, err := io.ReadAll(f)
+	require.NoError(t, err)
+
 	if diff := cmp.Diff(strings.TrimSpace(string(expected)), strings.TrimSpace(string(actual))); diff != "" {
 		require.Failf(t, "golden mismatch", "diff:\n%s", diff)
 	}
+}
+
+// isValidGoldenName ensures the golden file name contains only safe characters,
+// preventing path traversal when used in file path construction.
+func isValidGoldenName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, r := range name {
+		if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '-' && r != '_' {
+			return false
+		}
+	}
+	return true
 }

@@ -4,8 +4,7 @@ tenant: core-systems
 owner: platform-ops
 environment: production
 workload_profile: medium
-template_name: vm-app
-composition_ref: composition-vm-app-v1
+catalogue_item: vm-app
 namespace: platform-system
 residency: eu
 primary_region: eu-west-1
@@ -16,6 +15,7 @@ ingress_mode: private
 egress_mode: nat
 dr_required: true
 backup_required: true
+cost_centre: cost-center-789
 vm:
   enabled: true
   count: 2
@@ -25,3 +25,10 @@ vm:
   os_image: ubuntu-22.04
   arch: amd64
   multi_az: true
+vpc:
+  enabled: true
+  cidr: 10.42.0.0/16
+  private_subnets: 3
+  public_subnets: 3
+  nat_gateways: 1
+  flow_logs: true

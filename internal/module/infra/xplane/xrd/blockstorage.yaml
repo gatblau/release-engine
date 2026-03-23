@@ -1,0 +1,72 @@
+apiVersion: apiextensions.crossplane.io/v2
+kind: CompositeResourceDefinition
+metadata:
+  name: xblockstorages.infrastructure.platform.io
+spec:
+  group: infrastructure.platform.io
+  names:
+    kind: XBlockStorage
+    plural: xblockstorages
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: [parameters]
+              properties:
+                compositionRef:
+                  type: object
+                  properties:
+                    name:
+                      type: string
+                parameters:
+                  type: object
+                  required: [region, sizeGb, availabilityZone]
+                  properties:
+                    region:
+                      type: string
+                    providerConfigRef:
+                      type: string
+                      default: aws-provider
+                    sizeGb:
+                      type: integer
+                      minimum: 1
+                      maximum: 16384
+                    availabilityZone:
+                      type: string
+                    volumeType:
+                      type: string
+                      default: gp3
+                      enum: [gp3, gp2, io1, io2, st1, sc1]
+                    iops:
+                      type: integer
+                      description: "Only for io1/io2/gp3. gp3 default: 3000"
+                    throughput:
+                      type: integer
+                      description: "Only for gp3. Default: 125 MiB/s"
+                    encrypted:
+                      type: boolean
+                      default: true
+                    kmsKeyId:
+                      type: string
+                      description: "Custom KMS key. Defaults to aws/ebs."
+                    tags:
+                      type: object
+                      additionalProperties:
+                        type: string
+                    overrides:
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+            status:
+              type: object
+              properties:
+                volumeId:
+                  type: string
+                volumeArn:
+                  type: string

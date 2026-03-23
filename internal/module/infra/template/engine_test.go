@@ -19,8 +19,7 @@ func engineTestParams() *template.ProvisionParams {
 		Owner:              "platform-team",
 		Environment:        "production",
 		WorkloadProfile:    "medium",
-		TemplateName:       catalog.K8sAppName,
-		CompositionRef:     "composition-web-v1",
+		CatalogueItem:      catalog.K8sAppName,
 		Namespace:          "platform-system",
 		Residency:          "eu",
 		PrimaryRegion:      "eu-west-1",
@@ -31,6 +30,7 @@ func engineTestParams() *template.ProvisionParams {
 		EgressMode:         "nat",
 		DRRequired:         true,
 		BackupRequired:     true,
+		CostCentre:         "cost-center-123",
 		Kubernetes:         template.KubernetesParams{Enabled: true},
 	}
 }
@@ -38,10 +38,13 @@ func engineTestParams() *template.ProvisionParams {
 func TestEngine_Render_IncludesAlwaysOnFragments(t *testing.T) {
 	p := engineTestParams()
 	p.ExtraTags = map[string]string{"owner-team": "core"}
+	p.Kubernetes.Tier = "standard"
+	p.Kubernetes.Size = "medium"
 
 	engine := template.NewEngine(
 		&fragments.TagsFragment{},
 		&fragments.ComplianceFragment{},
+		&fragments.KubernetesFragment{},
 	)
 
 	out, err := engine.Render(p)
@@ -50,10 +53,11 @@ func TestEngine_Render_IncludesAlwaysOnFragments(t *testing.T) {
 	var doc map[string]any
 	require.NoError(t, yaml.Unmarshal(out, &doc))
 
+	assert.Equal(t, "XKubernetesCluster", doc["kind"])
 	spec := doc["spec"].(map[string]any)
 	params := spec["parameters"].(map[string]any)
-	assert.Contains(t, params, "tags")
-	assert.Contains(t, params, "compliance")
+	assert.Contains(t, params, "region")
+	assert.Contains(t, params, "nodePool")
 }
 
 func TestEngine_Render_RequiresAtLeastOneCapability(t *testing.T) {
@@ -98,7 +102,6 @@ func TestEngine_Render_CrossValidationCriticalRequiresObservability(t *testing.T
 
 func TestEngine_Render_WithCatalogAppliesDefaults(t *testing.T) {
 	p := engineTestParams()
-	p.CompositionRef = ""
 	p.Kubernetes.Tier = ""
 	p.Kubernetes.Size = "medium"
 
@@ -120,16 +123,15 @@ func TestEngine_Render_WithCatalogAppliesDefaults(t *testing.T) {
 
 	spec := doc["spec"].(map[string]any)
 	compRef := spec["compositionRef"].(map[string]any)
-	assert.Equal(t, "composition-k8s-application-v1", compRef["name"])
+	assert.Equal(t, "kubernetes-aws", compRef["name"])
 
 	params := spec["parameters"].(map[string]any)
-	kube := params["kubernetes"].(map[string]any)
-	assert.Equal(t, "standard", kube["tier"])
+	nodePool := params["nodePool"].(map[string]any)
+	assert.NotNil(t, nodePool["instanceType"])
 }
 
 func TestEngine_Render_CatalogForbiddenCapability(t *testing.T) {
 	p := engineTestParams()
-	p.CompositionRef = ""
 	p.VM.Enabled = true
 	p.VM.Count = 1
 	p.VM.InstanceFamily = "general"
@@ -148,8 +150,7 @@ func TestEngine_Render_CatalogForbiddenCapability(t *testing.T) {
 
 func TestEngine_Render_CatalogRequiredCapability(t *testing.T) {
 	p := engineTestParams()
-	p.TemplateName = catalog.DataProcName
-	p.CompositionRef = ""
+	p.CatalogueItem = catalog.DataProcName
 	p.Kubernetes.Enabled = true
 	p.Kubernetes.Tier = "advanced"
 	p.Kubernetes.Size = "medium"
@@ -163,5 +164,5 @@ func TestEngine_Render_CatalogRequiredCapability(t *testing.T) {
 	_, err = engine.Render(p)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "required")
-	assert.Contains(t, err.Error(), "object_storage")
+	assert.Contains(t, err.Error(), "objectStorage")
 }

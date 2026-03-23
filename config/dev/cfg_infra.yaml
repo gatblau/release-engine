@@ -1,0 +1,15 @@
+# cfg_infra.yaml - Development environment
+apiVersion: module.config/v1
+module: infra
+
+# Development environment variables
+vars:
+  health_timeout: 30s
+  poll_interval: 2s
+
+# Development connector implementations (local/mock connectors)
+connectors:
+  families:
+    git: file
+    policy: pmock
+    webhook: wmock

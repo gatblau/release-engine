@@ -106,6 +106,21 @@ type Connector interface {
 	Close() error
 }
 
+// GitConnector is a typed interface for git family connectors.
+type GitConnector interface {
+	Connector
+}
+
+// PolicyConnector is a typed interface for policy family connectors.
+type PolicyConnector interface {
+	Connector
+}
+
+// WebhookConnector is a typed interface for webhook family connectors.
+type WebhookConnector interface {
+	Connector
+}
+
 // OperationDescriber is an optional interface that connectors may implement
 // to provide introspection into supported operations.
 type OperationDescriber interface {
@@ -130,4 +145,18 @@ type ConnectorRegistry interface {
 	Lookup(key string) (Connector, bool)
 	ListByType(connectorType ConnectorType) []Connector
 	Close() error
+}
+
+// TypedConnectorRegistry extends ConnectorRegistry with family-aware typed resolution methods.
+type TypedConnectorRegistry interface {
+	ConnectorRegistry
+
+	// ResolveGit resolves a git connector by implementation name.
+	ResolveGit(name string) (GitConnector, error)
+
+	// ResolvePolicy resolves a policy connector by implementation name.
+	ResolvePolicy(name string) (PolicyConnector, error)
+
+	// ResolveWebhook resolves a webhook connector by implementation name.
+	ResolveWebhook(name string) (WebhookConnector, error)
 }

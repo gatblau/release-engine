@@ -1,0 +1,86 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: xblockstorage-aws-ebs
+  labels:
+    provider: aws
+    service: ebs
+spec:
+  compositeTypeRef:
+    apiVersion: infrastructure.platform.io/v1alpha1
+    kind: XBlockStorage
+
+  mode: Pipeline
+  pipeline:
+    - step: render
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- $xr := .observed.composite.resource }}
+            {{- $spec := $xr.spec.parameters }}
+            {{- $name := $xr.metadata.name }}
+            {{- $region := $spec.region }}
+            {{- $providerConfigName := default "aws-provider" $spec.providerConfigRef }}
+            {{- $volumeType := default "gp3" $spec.volumeType }}
+            {{- $encrypted := default true $spec.encrypted }}
+            {{- $tags := default dict $spec.tags }}
+
+            ---
+            apiVersion: ec2.aws.upbound.io/v1beta1
+            kind: EBSVolume
+            metadata:
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: ebs-volume
+            spec:
+              deletionPolicy: Delete
+              providerConfigRef:
+                name: {{ $providerConfigName }}
+              forProvider:
+                region: {{ $region }}
+                availabilityZone: {{ $spec.availabilityZone }}
+                size: {{ $spec.sizeGb }}
+                type: {{ $volumeType }}
+                encrypted: {{ $encrypted }}
+                {{- if $spec.kmsKeyId }}
+                kmsKeyId: {{ $spec.kmsKeyId }}
+                {{- end }}
+                {{- if and (or (eq $volumeType "gp3") (eq $volumeType "io1") (eq $volumeType "io2")) $spec.iops }}
+                iops: {{ $spec.iops }}
+                {{- else if eq $volumeType "gp3" }}
+                iops: 3000
+                {{- end }}
+                {{- if and (eq $volumeType "gp3") $spec.throughput }}
+                throughput: {{ $spec.throughput }}
+                {{- else if eq $volumeType "gp3" }}
+                throughput: 125
+                {{- end }}
+                tags:
+                {{- range $k, $v := $tags }}
+                  {{ $k }}: {{ $v | quote }}
+                {{- end }}
+                  managed-by: crossplane
+                  Name: {{ $name }}
+
+            {{/* ============================================================
+                 STATUS
+                 ============================================================ */}}
+            ---
+            apiVersion: infrastructure.platform.io/v1alpha1
+            kind: XBlockStorage
+            metadata:
+              name: {{ $name }}
+            status:
+              {{- $vol := index .observed.resources "ebs-volume" }}
+              {{- if and $vol $vol.resource $vol.resource.status $vol.resource.status.atProvider }}
+              volumeId: {{ $vol.resource.status.atProvider.id }}
+              volumeArn: {{ $vol.resource.status.atProvider.arn }}
+              {{- end }}
+
+    - step: ready
+      functionRef:
+        name: function-auto-ready

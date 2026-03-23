@@ -1,0 +1,90 @@
+apiVersion: apiextensions.crossplane.io/v2
+kind: CompositeResourceDefinition
+metadata:
+  name: xvirtualmachines.infrastructure.platform.io
+spec:
+  group: infrastructure.platform.io
+  names:
+    kind: XVirtualMachine
+    plural: xvirtualmachines
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: [parameters]
+              properties:
+                compositionRef:
+                  type: object
+                  properties:
+                    name:
+                      type: string
+                parameters:
+                  type: object
+                  required: [region, subnetId, instanceType]
+                  properties:
+                    region:
+                      type: string
+                    providerConfigRef:
+                      type: string
+                      default: aws-provider
+                    instanceType:
+                      type: string
+                      description: "e.g. t3.medium, m5.large"
+                    ami:
+                      type: string
+                      description: "AMI ID. If omitted, composition selects latest Amazon Linux 2023"
+                    subnetId:
+                      type: string
+                    securityGroupIds:
+                      type: array
+                      items:
+                        type: string
+                      default: []
+                    diskSizeGb:
+                      type: integer
+                      default: 30
+                    diskType:
+                      type: string
+                      default: gp3
+                      enum: [gp3, gp2, io1, io2]
+                    keyPairName:
+                      type: string
+                      description: "SSH key pair. If omitted, no SSH access."
+                    publicIp:
+                      type: boolean
+                      default: false
+                    userData:
+                      type: string
+                      description: "Base64-encoded user data script"
+                    iamRolePolicies:
+                      type: array
+                      items:
+                        type: string
+                      default:
+                        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+                      description: "Managed policy ARNs to attach to instance role"
+                    tags:
+                      type: object
+                      additionalProperties:
+                        type: string
+                    overrides:
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+            status:
+              type: object
+              properties:
+                instanceId:
+                  type: string
+                privateIp:
+                  type: string
+                publicIp:
+                  type: string
+                instanceRoleArn:
+                  type: string

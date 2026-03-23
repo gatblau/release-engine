@@ -1,0 +1,103 @@
+apiVersion: apiextensions.crossplane.io/v2
+kind: CompositeResourceDefinition
+metadata:
+  name: xloadbalancers.infrastructure.platform.io
+spec:
+  group: infrastructure.platform.io
+  names:
+    kind: XLoadBalancer
+    plural: xloadbalancers
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: [parameters]
+              properties:
+                compositionRef:
+                  type: object
+                  properties:
+                    name:
+                      type: string
+                parameters:
+                  type: object
+                  required: [region, subnetIds, vpcId]
+                  properties:
+                    region:
+                      type: string
+                    providerConfigRef:
+                      type: string
+                      default: aws-provider
+                    type:
+                      type: string
+                      default: application
+                      enum: [application, network]
+                    scheme:
+                      type: string
+                      default: internal
+                      enum: [internal, internet-facing]
+                    vpcId:
+                      type: string
+                    subnetIds:
+                      type: array
+                      items:
+                        type: string
+                    securityGroupIds:
+                      type: array
+                      items:
+                        type: string
+                      default: []
+                    listener:
+                      type: object
+                      properties:
+                        port:
+                          type: integer
+                          default: 443
+                        protocol:
+                          type: string
+                          default: HTTPS
+                          enum: [HTTP, HTTPS, TCP, TLS]
+                        certificateArn:
+                          type: string
+                          description: "ACM certificate ARN. Required for HTTPS/TLS."
+                    target:
+                      type: object
+                      properties:
+                        port:
+                          type: integer
+                          default: 8080
+                        protocol:
+                          type: string
+                          default: HTTP
+                          enum: [HTTP, HTTPS, TCP]
+                        healthCheckPath:
+                          type: string
+                          default: /health
+                        targetType:
+                          type: string
+                          default: ip
+                          enum: [ip, instance]
+                    tags:
+                      type: object
+                      additionalProperties:
+                        type: string
+                    overrides:
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+            status:
+              type: object
+              properties:
+                loadBalancerArn:
+                  type: string
+                dnsName:
+                  type: string
+                hostedZoneId:
+                  type: string
+                targetGroupArn:
+                  type: string

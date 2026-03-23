@@ -1,0 +1,68 @@
+apiVersion: apiextensions.crossplane.io/v2
+kind: CompositeResourceDefinition
+metadata:
+  name: xvpcnetworks.infrastructure.platform.io
+spec:
+  scope: Namespaced
+  defaultCompositionRef:
+    name: vpc-aws-v2
+  group: infrastructure.platform.io
+  names:
+    kind: XVPCNetwork
+    plural: xvpcnetworks
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required:
+                - parameters
+              properties:
+                parameters:
+                  type: object
+                  required:
+                    - cidr
+                    - region
+                  properties:
+                    region:
+                      type: string
+                      default: eu-west-1
+                    providerConfigRef:
+                      type: string
+                      default: aws-provider
+                    cidr:
+                      type: string
+                    privateSubnets:
+                      type: integer
+                      default: 3
+                    publicSubnets:
+                      type: integer
+                      default: 3
+                    natGateways:
+                      type: integer
+                      default: 1
+                    flowLogs:
+                      type: boolean
+                      default: true
+                    availabilityZones:
+                      type: array
+                      items:
+                        type: string
+            status:
+              type: object
+              properties:
+                vpcId:
+                  type: string
+                privateSubnetIds:
+                  type: array
+                  items:
+                    type: string
+                publicSubnetIds:
+                  type: array
+                  items:
+                    type: string

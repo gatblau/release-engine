@@ -1,0 +1,44 @@
+apiVersion: infrastructure.platform.io/v1alpha1
+kind: XCDN
+metadata:
+  name: my-cdn-full
+  namespace: default
+spec:
+  parameters:
+    providerConfigRef: aws-prod
+    enabled: true
+    aliases:
+      - cdn.example.com
+      - www.example.com
+    defaultRootObject: index.html
+    comment: Production CDN
+    priceClass: PriceClass_200
+    httpVersion: http2and3
+    isIpv6Enabled: true
+    waitForDeployment: true
+    tags:
+      Environment: production
+      Team: platform
+    origins:
+      - name: s3-origin
+        domainName: my-bucket.s3.amazonaws.com
+        s3OriginConfig:
+          originAccessIdentity: origin-access-identity/cloudfront/EXAMPLE
+      - name: api-origin
+        domainName: api.example.com
+        customOriginConfig:
+          httpPort: 80
+          httpsPort: 443
+          originProtocolPolicy: https-only
+    defaultCacheBehavior:
+      targetOriginName: s3-origin
+      viewerProtocolPolicy: redirect-to-https
+      cachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+      compress: true
+    certificate:
+      domainName: example.com
+      subjectAlternativeNames:
+        - "*.example.com"
+    dns:
+      hostedZoneId: Z0123456789ABCDEF
+      evaluateTargetHealth: false

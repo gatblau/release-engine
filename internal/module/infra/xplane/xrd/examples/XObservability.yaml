@@ -1,0 +1,10 @@
+apiVersion: infrastructure.platform.io/v1alpha1
+kind: XObservability
+metadata:
+  name: team-a-observability
+  namespace: platform-observability
+spec:
+  parameters:
+    region: eu-west-1
+    providerConfigRef: aws-provider
+    logRetentionDays: 90

@@ -16,7 +16,7 @@ func TestLoadAll_LoadsEmbeddedDefinitions(t *testing.T) {
 	require.Contains(t, cats, catalog.VMAppName)
 	require.Contains(t, cats, catalog.DataProcName)
 
-	assert.NotEmpty(t, cats[catalog.K8sAppName].CompositionRef)
+	assert.NotEmpty(t, cats[catalog.K8sAppName].Name)
 }
 
 func TestCatalogNameConstants_MatchEmbeddedDefinitions(t *testing.T) {

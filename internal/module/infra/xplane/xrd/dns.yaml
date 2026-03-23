@@ -1,0 +1,79 @@
+apiVersion: apiextensions.crossplane.io/v2
+kind: CompositeResourceDefinition
+metadata:
+  name: xdnszones.infrastructure.platform.io
+spec:
+  scope: Namespaced
+  group: infrastructure.platform.io
+  names:
+    kind: XDNSZone
+    plural: xdnszones
+  defaultCompositionRef:
+    name: dns-aws
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                parameters:
+                  type: object
+                  required:
+                    - region
+                    - zoneName
+                  properties:
+                    providerConfigRef:
+                      type: string
+                      default: aws-provider
+                    region:
+                      type: string
+                    zoneName:
+                      type: string
+                    private:
+                      type: boolean
+                      default: false
+                    vpcId:
+                      type: string
+                    records:
+                      type: array
+                      items:
+                        type: object
+                        required:
+                          - name
+                          - type
+                          - values
+                        properties:
+                          name:
+                            type: string
+                          type:
+                            type: string
+                            enum:
+                              - A
+                              - AAAA
+                              - CNAME
+                              - MX
+                              - TXT
+                              - NS
+                              - SRV
+                              - PTR
+                          ttl:
+                            type: integer
+                            default: 300
+                          values:
+                            type: array
+                            items:
+                              type: string
+            status:
+              type: object
+              properties:
+                zoneId:
+                  type: string
+                nameServers:
+                  type: array
+                  items:
+                    type: string

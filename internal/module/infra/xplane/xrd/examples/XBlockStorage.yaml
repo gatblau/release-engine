@@ -1,0 +1,14 @@
+apiVersion: infrastructure.platform.io/v1alpha1
+kind: XBlockStorage
+metadata:
+  name: data-volume-01
+  namespace: team-alpha
+spec:
+  compositionRef:
+    name: xblockstorage-aws-ebs
+  parameters:
+    region: us-east-1
+    availabilityZone: us-east-1a
+    sizeGb: 100
+    tags:
+      team: alpha

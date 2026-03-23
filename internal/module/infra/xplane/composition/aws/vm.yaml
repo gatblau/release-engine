@@ -1,0 +1,191 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: xvirtualmachine-aws-ec2
+  labels:
+    provider: aws
+    service: ec2
+spec:
+  compositeTypeRef:
+    apiVersion: infrastructure.platform.io/v1alpha1
+    kind: XVirtualMachine
+
+  mode: Pipeline
+  pipeline:
+    - step: render
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- $xr := .observed.composite.resource }}
+            {{- $spec := $xr.spec.parameters }}
+            {{- $name := $xr.metadata.name }}
+            {{- $region := $spec.region }}
+            {{- $providerConfigName := default "aws-provider" $spec.providerConfigRef }}
+            {{- $instanceType := $spec.instanceType }}
+            {{- $diskSizeGb := default 30 $spec.diskSizeGb }}
+            {{- $diskType := default "gp3" $spec.diskType }}
+            {{- $publicIp := default false $spec.publicIp }}
+            {{- $tags := default dict $spec.tags }}
+            {{- $policies := default (list "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore") $spec.iamRolePolicies }}
+
+            {{/* ============================================================
+                 INSTANCE IAM ROLE
+                 ============================================================ */}}
+            ---
+            apiVersion: iam.aws.upbound.io/v1beta1
+            kind: Role
+            metadata:
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: instance-role
+              labels:
+                role: instance
+            spec:
+              deletionPolicy: Delete
+              providerConfigRef:
+                name: {{ $providerConfigName }}
+              forProvider:
+                assumeRolePolicy: |
+                  {
+                    "Version": "2012-10-17",
+                    "Statement": [{
+                      "Effect": "Allow",
+                      "Principal": {"Service": "ec2.amazonaws.com"},
+                      "Action": "sts:AssumeRole"
+                    }]
+                  }
+                tags:
+                {{- range $k, $v := $tags }}
+                  {{ $k }}: {{ $v | quote }}
+                {{- end }}
+                  managed-by: crossplane
+                  instance: {{ $name }}
+
+            {{- range $i, $policyArn := $policies }}
+            ---
+            apiVersion: iam.aws.upbound.io/v1beta1
+            kind: RolePolicyAttachment
+            metadata:
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: {{ printf "instance-policy-%d" $i }}
+            spec:
+              deletionPolicy: Delete
+              providerConfigRef:
+                name: {{ $providerConfigName }}
+              forProvider:
+                policyArn: {{ $policyArn }}
+                roleSelector:
+                  matchControllerRef: true
+                  matchLabels:
+                    role: instance
+            {{- end }}
+
+            {{/* ============================================================
+                 INSTANCE PROFILE
+                 ============================================================ */}}
+            ---
+            apiVersion: iam.aws.upbound.io/v1beta1
+            kind: InstanceProfile
+            metadata:
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: instance-profile
+            spec:
+              deletionPolicy: Delete
+              providerConfigRef:
+                name: {{ $providerConfigName }}
+              forProvider:
+                roleSelector:
+                  matchControllerRef: true
+                  matchLabels:
+                    role: instance
+                tags:
+                {{- range $k, $v := $tags }}
+                  {{ $k }}: {{ $v | quote }}
+                {{- end }}
+                  managed-by: crossplane
+
+            {{/* ============================================================
+                 EC2 INSTANCE
+                 ============================================================ */}}
+            ---
+            apiVersion: ec2.aws.upbound.io/v1beta2
+            kind: Instance
+            metadata:
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: ec2-instance
+            spec:
+              deletionPolicy: Delete
+              providerConfigRef:
+                name: {{ $providerConfigName }}
+              forProvider:
+                region: {{ $region }}
+                instanceType: {{ $instanceType }}
+                subnetId: {{ $spec.subnetId }}
+                {{- if $spec.ami }}
+                ami: {{ $spec.ami }}
+                {{- else }}
+                amiSelector:
+                  matchLabels:
+                    ami-type: amazon-linux-2023
+                {{- end }}
+                {{- if $spec.securityGroupIds }}
+                vpcSecurityGroupIds:
+                {{- range $sg := $spec.securityGroupIds }}
+                  - {{ $sg }}
+                {{- end }}
+                {{- end }}
+                associatePublicIpAddress: {{ $publicIp }}
+                iamInstanceProfileSelector:
+                  matchControllerRef: true
+                rootBlockDevice:
+                  - volumeSize: {{ $diskSizeGb }}
+                    volumeType: {{ $diskType }}
+                    encrypted: true
+                    deleteOnTermination: true
+                {{- if $spec.keyPairName }}
+                keyName: {{ $spec.keyPairName }}
+                {{- end }}
+                {{- if $spec.userData }}
+                userData: {{ $spec.userData }}
+                {{- end }}
+                metadataOptions:
+                  - httpEndpoint: enabled
+                    httpTokens: required
+                    httpPutResponseHopLimit: 2
+                monitoring: true
+                tags:
+                {{- range $k, $v := $tags }}
+                  {{ $k }}: {{ $v | quote }}
+                {{- end }}
+                  managed-by: crossplane
+                  Name: {{ $name }}
+
+            {{/* ============================================================
+                 STATUS
+                 ============================================================ */}}
+            ---
+            apiVersion: infrastructure.platform.io/v1alpha1
+            kind: XVirtualMachine
+            metadata:
+              name: {{ $name }}
+            status:
+              {{- $inst := index .observed.resources "ec2-instance" }}
+              {{- if and $inst $inst.resource $inst.resource.status $inst.resource.status.atProvider }}
+              instanceId: {{ $inst.resource.status.atProvider.id }}
+              privateIp: {{ $inst.resource.status.atProvider.privateIp }}
+              {{- if $inst.resource.status.atProvider.publicIp }}
+              publicIp: {{ $inst.resource.status.atProvider.publicIp }}
+              {{- end }}
+              {{- end }}
+              {{- $role := index .observed.resources "instance-role" }}
+              {{- if and $role $role.resource $role.resource.status $role.resource.status.atProvider }}
+              instanceRoleArn: {{ $role.resource.status.atProvider.arn }}
+              {{- end }}
+
+    - step: ready
+      functionRef:
+        name: function-auto-ready

@@ -1,0 +1,246 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: vpc-aws-v2
+  labels:
+    provider: aws
+spec:
+  compositeTypeRef:
+    apiVersion: infrastructure.platform.io/v1alpha1
+    kind: XVPCNetwork
+  mode: Pipeline
+  pipeline:
+    - step: render
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- $xr := .observed.composite.resource -}}
+            {{- $params := $xr.spec.parameters -}}
+            {{- $name := $xr.metadata.name -}}
+            {{- $namespace := $xr.metadata.namespace -}}
+            {{- $region := default "eu-west-1" $params.region -}}
+            {{- $providerConfigName := default "aws-provider" $params.providerConfigRef -}}
+            {{- $providerConfigKind := "ClusterProviderConfig" -}}
+
+            {{- $requestedPrivate := int (default 3 $params.privateSubnets) -}}
+            {{- $requestedPublic := int (default 3 $params.publicSubnets) -}}
+            {{- $requestedNat := int (default 1 $params.natGateways) -}}
+
+            {{- $maxPrivate := 3 -}}
+            {{- $maxPublic := 3 -}}
+
+            {{- $privateCount := min $requestedPrivate $maxPrivate -}}
+            {{- $publicCount := min $requestedPublic $maxPublic -}}
+            {{- $natCount := min $requestedNat $publicCount -}}
+
+            {{- $privateCidrs := list "10.0.1.0/24" "10.0.2.0/24" "10.0.3.0/24" -}}
+            {{- $publicCidrs := list "10.0.101.0/24" "10.0.102.0/24" "10.0.103.0/24" -}}
+
+            ---
+            apiVersion: ec2.aws.m.upbound.io/v1beta1
+            kind: VPC
+            metadata:
+              namespace: {{ $namespace }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: vpc
+              labels:
+                infrastructure.platform.io/xr-name: {{ $name | quote }}
+            spec:
+              providerConfigRef:
+                name: {{ $providerConfigName | quote }}
+                kind: {{ $providerConfigKind | quote }}
+              forProvider:
+                region: {{ $region | quote }}
+                cidrBlock: {{ $params.cidr | quote }}
+                enableDnsSupport: true
+                enableDnsHostnames: true
+                tags:
+                  managed-by: crossplane
+                  xr-name: {{ $name | quote }}
+
+            ---
+            apiVersion: ec2.aws.m.upbound.io/v1beta1
+            kind: InternetGateway
+            metadata:
+              namespace: {{ $namespace }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: internet-gateway
+              labels:
+                infrastructure.platform.io/xr-name: {{ $name | quote }}
+            spec:
+              providerConfigRef:
+                name: {{ $providerConfigName | quote }}
+                kind: {{ $providerConfigKind | quote }}
+              forProvider:
+                region: {{ $region | quote }}
+                vpcIdSelector:
+                  matchControllerRef: true
+
+            {{- range $i := until $privateCount }}
+            ---
+            apiVersion: ec2.aws.m.upbound.io/v1beta1
+            kind: Subnet
+            metadata:
+              namespace: {{ $namespace }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: {{ printf "private-subnet-%d" $i | quote }}
+              labels:
+                infrastructure.platform.io/xr-name: {{ $name | quote }}
+                subnet-type: private
+                subnet-index: {{ printf "%d" $i | quote }}
+            spec:
+              providerConfigRef:
+                name: {{ $providerConfigName | quote }}
+                kind: {{ $providerConfigKind | quote }}
+              forProvider:
+                region: {{ $region | quote }}
+                vpcIdSelector:
+                  matchControllerRef: true
+                cidrBlock: {{ index $privateCidrs $i | quote }}
+                mapPublicIpOnLaunch: false
+                {{- if and $params.availabilityZones (gt (len $params.availabilityZones) $i) }}
+                availabilityZone: {{ index $params.availabilityZones $i | quote }}
+                {{- end }}
+                tags:
+                  managed-by: crossplane
+                  xr-name: {{ $name | quote }}
+                  subnet-type: private
+                  subnet-index: {{ printf "%d" $i | quote }}
+            {{- end }}
+
+            {{- range $i := until $publicCount }}
+            ---
+            apiVersion: ec2.aws.m.upbound.io/v1beta1
+            kind: Subnet
+            metadata:
+              namespace: {{ $namespace }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: {{ printf "public-subnet-%d" $i | quote }}
+              labels:
+                infrastructure.platform.io/xr-name: {{ $name | quote }}
+                subnet-type: public
+                subnet-index: {{ printf "%d" $i | quote }}
+                nat-gateway-index: {{ printf "%d" $i | quote }}
+            spec:
+              providerConfigRef:
+                name: {{ $providerConfigName | quote }}
+                kind: {{ $providerConfigKind | quote }}
+              forProvider:
+                region: {{ $region | quote }}
+                vpcIdSelector:
+                  matchControllerRef: true
+                cidrBlock: {{ index $publicCidrs $i | quote }}
+                mapPublicIpOnLaunch: true
+                {{- if and $params.availabilityZones (gt (len $params.availabilityZones) $i) }}
+                availabilityZone: {{ index $params.availabilityZones $i | quote }}
+                {{- end }}
+                tags:
+                  managed-by: crossplane
+                  xr-name: {{ $name | quote }}
+                  subnet-type: public
+                  subnet-index: {{ printf "%d" $i | quote }}
+            {{- end }}
+
+            {{- range $i := until $natCount }}
+            ---
+            apiVersion: ec2.aws.m.upbound.io/v1beta1
+            kind: EIP
+            metadata:
+              namespace: {{ $namespace }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: {{ printf "nat-gateway-eip-%d" $i | quote }}
+              labels:
+                infrastructure.platform.io/xr-name: {{ $name | quote }}
+                nat-gateway-index: {{ printf "%d" $i | quote }}
+            spec:
+              providerConfigRef:
+                name: {{ $providerConfigName | quote }}
+                kind: {{ $providerConfigKind | quote }}
+              forProvider:
+                region: {{ $region | quote }}
+                domain: vpc
+
+            ---
+            apiVersion: ec2.aws.m.upbound.io/v1beta1
+            kind: NATGateway
+            metadata:
+              namespace: {{ $namespace }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: {{ printf "nat-gateway-%d" $i | quote }}
+              labels:
+                infrastructure.platform.io/xr-name: {{ $name | quote }}
+                nat-gateway-index: {{ printf "%d" $i | quote }}
+            spec:
+              providerConfigRef:
+                name: {{ $providerConfigName | quote }}
+                kind: {{ $providerConfigKind | quote }}
+              forProvider:
+                region: {{ $region | quote }}
+                allocationIdSelector:
+                  matchControllerRef: true
+                  matchLabels:
+                    nat-gateway-index: {{ printf "%d" $i | quote }}
+                subnetIdSelector:
+                  matchControllerRef: true
+                  matchLabels:
+                    subnet-type: public
+                    nat-gateway-index: {{ printf "%d" $i | quote }}
+            {{- end }}
+
+            {{- $vpcId := "" -}}
+            {{- if hasKey .observed.resources "vpc" -}}
+              {{- $vpcId = dig "resource" "status" "atProvider" "id" "" (index .observed.resources "vpc") -}}
+            {{- end -}}
+
+            {{- $privateSubnetIds := list -}}
+            {{- range $i := until $privateCount -}}
+              {{- $r := printf "private-subnet-%d" $i -}}
+              {{- if hasKey $.observed.resources $r -}}
+                {{- $id := dig "resource" "status" "atProvider" "id" "" (index $.observed.resources $r) -}}
+                {{- if $id -}}
+                  {{- $privateSubnetIds = append $privateSubnetIds $id -}}
+                {{- end -}}
+              {{- end -}}
+            {{- end -}}
+
+            {{- $publicSubnetIds := list -}}
+            {{- range $i := until $publicCount -}}
+              {{- $r := printf "public-subnet-%d" $i -}}
+              {{- if hasKey $.observed.resources $r -}}
+                {{- $id := dig "resource" "status" "atProvider" "id" "" (index $.observed.resources $r) -}}
+                {{- if $id -}}
+                  {{- $publicSubnetIds = append $publicSubnetIds $id -}}
+                {{- end -}}
+              {{- end -}}
+            {{- end -}}
+
+            ---
+            apiVersion: infrastructure.platform.io/v1alpha1
+            kind: XVPCNetwork
+            status:
+              vpcId: {{ $vpcId | quote }}
+              {{- if gt (len $privateSubnetIds) 0 }}
+              privateSubnetIds:
+              {{- range $id := $privateSubnetIds }}
+                - {{ $id | quote }}
+              {{- end }}
+              {{- else }}
+              privateSubnetIds: []
+              {{- end }}
+              {{- if gt (len $publicSubnetIds) 0 }}
+              publicSubnetIds:
+              {{- range $id := $publicSubnetIds }}
+                - {{ $id | quote }}
+              {{- end }}
+              {{- else }}
+              publicSubnetIds: []
+              {{- end }}
+
+    - step: auto-ready
+      functionRef:
+        name: function-auto-ready

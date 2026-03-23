@@ -1,0 +1,64 @@
+apiVersion: apiextensions.crossplane.io/v2
+kind: CompositeResourceDefinition
+metadata:
+  name: xcaches.infrastructure.platform.io
+spec:
+  scope: Namespaced
+  group: infrastructure.platform.io
+  names:
+    kind: XCache
+    plural: xcaches
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required:
+                - parameters
+              properties:
+                parameters:
+                  type: object
+                  required:
+                    - engine
+                    - region
+                  properties:
+                    region:
+                      type: string
+                      default: eu-west-1
+                    providerConfigRef:
+                      type: string
+                      default: aws-provider
+                    engine:
+                      type: string
+                      enum:
+                        - redis
+                        - valkey
+                    nodeType:
+                      type: string
+                      default: cache.r7g.large
+                    engineVersion:
+                      type: string
+                    replicaCount:
+                      type: integer
+                      default: 2
+                    snapshotRetentionDays:
+                      type: integer
+                      default: 7
+                    subnetGroupName:
+                      type: string
+                    securityGroupIds:
+                      type: array
+                      items:
+                        type: string
+            status:
+              type: object
+              properties:
+                endpoint:
+                  type: string
+                port:
+                  type: integer

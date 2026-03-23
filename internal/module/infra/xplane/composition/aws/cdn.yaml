@@ -1,0 +1,293 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: xcdn-cloudfront
+spec:
+  compositeTypeRef:
+    apiVersion: infrastructure.platform.example.org/v1alpha1
+    kind: XCDN
+  mode: Pipeline
+  pipeline:
+    - step: render
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          options:
+            - missingkey=default
+          template: |
+            {{- $xr := .observed.composite.resource -}}
+            {{- $p := $xr.spec.parameters -}}
+            {{- $providerName := $p.providerConfigRef.name -}}
+            {{- $providerKind := $p.providerConfigRef.kind -}}
+            {{- $aliases := default (list) $p.aliases -}}
+            {{- $origins := default (list) $p.origins -}}
+            {{- $managedCert := false -}}
+            {{- if and (hasKey $p "certificate") (hasKey $p.certificate "managed") $p.certificate.managed -}}
+            {{- $managedCert = true -}}
+            {{- end -}}
+            {{- $existingCertArn := "" -}}
+            {{- if and (hasKey $p "certificate") (hasKey $p.certificate "existingCertificateArn") $p.certificate.existingCertificateArn -}}
+            {{- $existingCertArn = $p.certificate.existingCertificateArn -}}
+            {{- end -}}
+            {{- $needCustomCert := gt (len $aliases) 0 -}}
+            {{- $useManagedCert := and $needCustomCert $managedCert (eq $existingCertArn "") -}}
+            {{- $useExistingCert := and $needCustomCert (ne $existingCertArn "") -}}
+            
+            {{- if $useManagedCert }}
+            ---
+            apiVersion: acm.aws.m.upbound.io/v1beta1
+            kind: Certificate
+            metadata:
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: certificate
+              name: {{ printf "%s-cert" $xr.metadata.name | trunc 63 | trimSuffix "-" }}
+            spec:
+              providerConfigRef:
+                name: {{ $providerName }}
+                kind: {{ $providerKind }}
+              forProvider:
+                region: us-east-1
+                domainName: {{ $p.certificate.domainName }}
+                validationMethod: DNS
+                {{- if $p.certificate.subjectAlternativeNames }}
+                subjectAlternativeNames:
+                {{- range $san := $p.certificate.subjectAlternativeNames }}
+                - {{ $san }}
+                {{- end }}
+                {{- end }}
+                {{- if $p.tags }}
+                tags:
+            {{ toYaml $p.tags | indent 6 }}
+                {{- end }}
+            {{- end }}
+            
+            {{- if and $useManagedCert (index .observed.resources "certificate") ((index .observed.resources "certificate").resource.status.atProvider.domainValidationOptions) }}
+            {{- $dvos := (index .observed.resources "certificate").resource.status.atProvider.domainValidationOptions -}}
+            {{- range $i, $dvo := $dvos }}
+            ---
+            apiVersion: route53.aws.m.upbound.io/v1beta1
+            kind: Record
+            metadata:
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: {{ printf "cert-validation-%d" $i }}
+              name: {{ printf "%s-certval-%d" $xr.metadata.name $i | trunc 63 | trimSuffix "-" }}
+            spec:
+              providerConfigRef:
+                name: {{ $providerName }}
+                kind: {{ $providerKind }}
+              forProvider:
+                allowOverwrite: true
+                name: {{ $dvo.resourceRecordName }}
+                type: {{ $dvo.resourceRecordType }}
+                zoneId: {{ $p.certificate.validationHostedZoneId }}
+                ttl: {{ default 60 $p.certificate.validationRecordTTL }}
+                records:
+                - {{ $dvo.resourceRecordValue }}
+            {{- end }}
+            {{- end }}
+            
+            {{- if and $useManagedCert (index .observed.resources "certificate") ((index .observed.resources "certificate").resource.status.atProvider.arn) }}
+            ---
+            apiVersion: acm.aws.m.upbound.io/v1beta1
+            kind: CertificateValidation
+            metadata:
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: certificate-validation
+              name: {{ printf "%s-cert-validation" $xr.metadata.name | trunc 63 | trimSuffix "-" }}
+            spec:
+              providerConfigRef:
+                name: {{ $providerName }}
+                kind: {{ $providerKind }}
+              forProvider:
+                region: us-east-1
+                certificateArn: {{ (index .observed.resources "certificate").resource.status.atProvider.arn }}
+                validationRecordFqdns:
+                {{- $dvos := default (list) (index .observed.resources "certificate").resource.status.atProvider.domainValidationOptions }}
+                {{- range $i, $_ := $dvos }}
+                {{- $rec := index $.observed.resources (printf "cert-validation-%d" $i) }}
+                {{- if and $rec $rec.resource $rec.resource.status $rec.resource.status.atProvider $rec.resource.status.atProvider.fqdn }}
+                - {{ $rec.resource.status.atProvider.fqdn }}
+                {{- end }}
+                {{- end }}
+            {{- end }}
+            
+            {{- $renderDistribution := false -}}
+            {{- if not $needCustomCert -}}
+            {{- $renderDistribution = true -}}
+            {{- else if $useExistingCert -}}
+            {{- $renderDistribution = true -}}
+            {{- else if and $useManagedCert (index .observed.resources "certificate") ((index .observed.resources "certificate").resource.status.atProvider.arn) -}}
+            {{- $renderDistribution = true -}}
+            {{- end -}}
+            
+            {{- if $renderDistribution }}
+            ---
+            apiVersion: cloudfront.aws.m.upbound.io/v1beta1
+            kind: Distribution
+            metadata:
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: distribution
+              name: {{ printf "%s-distribution" $xr.metadata.name | trunc 63 | trimSuffix "-" }}
+            spec:
+              providerConfigRef:
+                name: {{ $providerName }}
+                kind: {{ $providerKind }}
+              forProvider:
+                enabled: {{ default true $p.enabled }}
+                waitForDeployment: {{ default true $p.waitForDeployment }}
+                isIpv6Enabled: {{ default true $p.isIpv6Enabled }}
+                httpVersion: {{ default "http2" $p.httpVersion }}
+                priceClass: {{ default "PriceClass_100" $p.priceClass }}
+                {{- if $p.comment }}
+                comment: {{ $p.comment }}
+                {{- end }}
+                {{- if gt (len $aliases) 0 }}
+                aliases:
+                {{- range $alias := $aliases }}
+                - {{ $alias }}
+                {{- end }}
+                {{- end }}
+                {{- if $p.defaultRootObject }}
+                defaultRootObject: {{ $p.defaultRootObject }}
+                {{- end }}
+                restrictions:
+                  geoRestriction:
+                    restrictionType: none
+                    locations: []
+                viewerCertificate:
+                  {{- if not $needCustomCert }}
+                  cloudfrontDefaultCertificate: true
+                  minimumProtocolVersion: TLSv1
+                  {{- else if $useExistingCert }}
+                  acmCertificateArn: {{ $existingCertArn }}
+                  sslSupportMethod: {{ default "sni-only" $p.certificate.sslSupportMethod }}
+                  minimumProtocolVersion: {{ default "TLSv1.2_2021" $p.certificate.minimumProtocolVersion }}
+                  {{- else }}
+                  acmCertificateArn: {{ (index .observed.resources "certificate").resource.status.atProvider.arn }}
+                  sslSupportMethod: {{ default "sni-only" $p.certificate.sslSupportMethod }}
+                  minimumProtocolVersion: {{ default "TLSv1.2_2021" $p.certificate.minimumProtocolVersion }}
+                  {{- end }}
+                origin:
+                {{- range $origin := $origins }}
+                - originId: {{ $origin.name }}
+                  domainName: {{ $origin.domainName }}
+                  {{- if $origin.originPath }}
+                  originPath: {{ $origin.originPath }}
+                  {{- end }}
+                  customOriginConfig:
+                    httpPort: {{ default 80 $origin.httpPort }}
+                    httpsPort: {{ default 443 $origin.httpsPort }}
+                    originProtocolPolicy: {{ $origin.originProtocolPolicy }}
+                    originSslProtocols:
+                    {{- if $origin.originSslProtocols }}
+                    {{- range $proto := $origin.originSslProtocols }}
+                    - {{ $proto }}
+                    {{- end }}
+                    {{- else }}
+                    - TLSv1.2
+                    {{- end }}
+                  {{- if $origin.customHeaders }}
+                  customHeader:
+                  {{- range $hdr := $origin.customHeaders }}
+                  - name: {{ $hdr.name }}
+                    value: {{ $hdr.value }}
+                  {{- end }}
+                  {{- end }}
+                {{- end }}
+                defaultCacheBehavior:
+                  targetOriginId: {{ $p.defaultCacheBehavior.targetOriginName }}
+                  viewerProtocolPolicy: {{ $p.defaultCacheBehavior.viewerProtocolPolicy }}
+                  cachePolicyId: {{ $p.defaultCacheBehavior.cachePolicyId }}
+                  compress: {{ default true $p.defaultCacheBehavior.compress }}
+                  allowedMethods:
+                  {{- range $m := $p.defaultCacheBehavior.allowedMethods }}
+                  - {{ $m }}
+                  {{- end }}
+                  cachedMethods:
+                  {{- range $m := $p.defaultCacheBehavior.cachedMethods }}
+                  - {{ $m }}
+                  {{- end }}
+                  {{- if $p.defaultCacheBehavior.originRequestPolicyId }}
+                  originRequestPolicyId: {{ $p.defaultCacheBehavior.originRequestPolicyId }}
+                  {{- end }}
+                  {{- if $p.defaultCacheBehavior.responseHeadersPolicyId }}
+                  responseHeadersPolicyId: {{ $p.defaultCacheBehavior.responseHeadersPolicyId }}
+                  {{- end }}
+                {{- if $p.tags }}
+                tags:
+            {{ toYaml $p.tags | indent 6 }}
+                {{- end }}
+            {{- end }}
+            
+            {{- if and (hasKey $p "dns") (hasKey $p.dns "createAliasRecords") $p.dns.createAliasRecords (gt (len $aliases) 0) (index .observed.resources "distribution") ((index .observed.resources "distribution").resource.status.atProvider.domainName) ((index .observed.resources "distribution").resource.status.atProvider.hostedZoneId) }}
+            {{- range $i, $alias := $aliases }}
+            ---
+            apiVersion: route53.aws.m.upbound.io/v1beta1
+            kind: Record
+            metadata:
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: {{ printf "alias-a-%d" $i }}
+              name: {{ printf "%s-alias-a-%d" $xr.metadata.name $i | trunc 63 | trimSuffix "-" }}
+            spec:
+              providerConfigRef:
+                name: {{ $providerName }}
+                kind: {{ $providerKind }}
+              forProvider:
+                name: {{ $alias }}
+                type: A
+                zoneId: {{ $p.dns.hostedZoneId }}
+                alias:
+                  name: {{ (index .observed.resources "distribution").resource.status.atProvider.domainName }}
+                  zoneId: {{ (index .observed.resources "distribution").resource.status.atProvider.hostedZoneId }}
+                  evaluateTargetHealth: {{ default false $p.dns.evaluateTargetHealth }}
+            ---
+            apiVersion: route53.aws.m.upbound.io/v1beta1
+            kind: Record
+            metadata:
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: {{ printf "alias-aaaa-%d" $i }}
+              name: {{ printf "%s-alias-aaaa-%d" $xr.metadata.name $i | trunc 63 | trimSuffix "-" }}
+            spec:
+              providerConfigRef:
+                name: {{ $providerName }}
+                kind: {{ $providerKind }}
+              forProvider:
+                name: {{ $alias }}
+                type: AAAA
+                zoneId: {{ $p.dns.hostedZoneId }}
+                alias:
+                  name: {{ (index .observed.resources "distribution").resource.status.atProvider.domainName }}
+                  zoneId: {{ (index .observed.resources "distribution").resource.status.atProvider.hostedZoneId }}
+                  evaluateTargetHealth: {{ default false $p.dns.evaluateTargetHealth }}
+            {{- end }}
+            {{- end }}
+            
+            ---
+            apiVersion: infrastructure.platform.example.org/v1alpha1
+            kind: XCDN
+            status:
+              {{- if and (index .observed.resources "distribution") ((index .observed.resources "distribution").resource.status.atProvider.arn) }}
+              distributionArn: {{ (index .observed.resources "distribution").resource.status.atProvider.arn }}
+              {{- end }}
+              {{- if and (index .observed.resources "distribution") ((index .observed.resources "distribution").resource.status.atProvider.domainName) }}
+              distributionDomainName: {{ (index .observed.resources "distribution").resource.status.atProvider.domainName }}
+              {{- end }}
+              {{- if and (index .observed.resources "distribution") ((index .observed.resources "distribution").resource.status.atProvider.hostedZoneId) }}
+              distributionHostedZoneId: {{ (index .observed.resources "distribution").resource.status.atProvider.hostedZoneId }}
+              {{- end }}
+              {{- if and (index .observed.resources "distribution") ((index .observed.resources "distribution").resource.status.atProvider.status) }}
+              distributionStatus: {{ (index .observed.resources "distribution").resource.status.atProvider.status }}
+              {{- end }}
+              {{- if and (index .observed.resources "certificate") ((index .observed.resources "certificate").resource.status.atProvider.arn) }}
+              certificateArn: {{ (index .observed.resources "certificate").resource.status.atProvider.arn }}
+              {{- end }}
+              {{- if and (index .observed.resources "certificate") ((index .observed.resources "certificate").resource.status.atProvider.status) }}
+              certificateStatus: {{ (index .observed.resources "certificate").resource.status.atProvider.status }}
+              {{- end }}
+    - step: auto-ready
+      functionRef:
+        name: function-auto-ready

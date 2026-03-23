@@ -1,0 +1,50 @@
+apiVersion: apiextensions.crossplane.io/v2
+kind: CompositeResourceDefinition
+metadata:
+  name: xobjectstores.infrastructure.platform.io
+spec:
+  scope: Namespaced
+  group: infrastructure.platform.io
+  names:
+    kind: XObjectStore
+    plural: xobjectstores
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required:
+                - parameters
+              properties:
+                parameters:
+                  type: object
+                  required:
+                    - region
+                  properties:
+                    region:
+                      type: string
+                      default: eu-west-1
+                    providerConfigRef:
+                      type: string
+                      default: aws-provider
+                    versioning:
+                      type: boolean
+                      default: true
+                    retentionDays:
+                      type: integer
+                      default: 90
+                    encryption:
+                      type: boolean
+                      default: true
+            status:
+              type: object
+              properties:
+                bucketName:
+                  type: string
+                bucketArn:
+                  type: string

@@ -1,0 +1,16 @@
+# cfg_infra.yaml - Test environment
+apiVersion: module.config/v1
+module: infra
+
+# Test environment variables (similar to dev but with longer timeouts for CI/CD)
+vars:
+  health_timeout: 60s
+  poll_interval: 5s
+  log_level: debug
+
+# Test connector implementations (mock connectors for CI/CD)
+connectors:
+  families:
+    git: file
+    policy: pmock
+    webhook: wmock

@@ -1,0 +1,18 @@
+apiVersion: infrastructure.platform.io/v1alpha1
+kind: XVPCNetwork
+metadata:
+  name: example-vpc
+  namespace: networking
+spec:
+  parameters:
+    region: eu-west-1
+    providerConfigRef: aws-provider
+    cidr: 10.0.0.0/16
+    privateSubnets: 3
+    publicSubnets: 3
+    natGateways: 1
+    flowLogs: false
+    availabilityZones:
+      - eu-west-1a
+      - eu-west-1b
+      - eu-west-1c

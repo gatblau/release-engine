@@ -1,0 +1,17 @@
+apiVersion: infrastructure.platform.io/v1alpha1
+kind: XObjectStore
+metadata:
+  namespace: app-team-a
+  name: reports
+spec:
+  parameters:
+    region: eu-west-1
+    providerConfigRef:
+      name: aws-provider
+      kind: ClusterProviderConfig
+    versioning: true
+    retentionDays: 90
+    encryption: true
+  crossplane:
+    compositionRef:
+      name: objectstore-aws

@@ -1,0 +1,80 @@
+apiVersion: apiextensions.crossplane.io/v2
+kind: CompositeResourceDefinition
+metadata:
+  name: xidentities.infrastructure.platform.io
+spec:
+  group: infrastructure.platform.io
+  names:
+    kind: XIdentity
+    plural: xidentities
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: [parameters]
+              properties:
+                compositionRef:
+                  type: object
+                  properties:
+                    name:
+                      type: string
+                parameters:
+                  type: object
+                  required: [type]
+                  properties:
+                    providerConfigRef:
+                      type: string
+                      default: aws-provider
+                    type:
+                      type: string
+                      enum: [service, irsa, federation]
+                      description: |
+                        service: role assumable by an AWS service (e.g. lambda, ecs-tasks)
+                        irsa: role for EKS pod identity via OIDC
+                        federation: role assumable by external IdP
+                    servicePrincipal:
+                      type: string
+                      description: "Required when type=service. e.g. lambda.amazonaws.com"
+                    oidc:
+                      type: object
+                      description: "Required when type=irsa"
+                      properties:
+                        issuerUrl:
+                          type: string
+                        namespace:
+                          type: string
+                        serviceAccount:
+                          type: string
+                    federationProvider:
+                      type: string
+                      description: "Required when type=federation. SAML provider ARN."
+                    managedPolicies:
+                      type: array
+                      items:
+                        type: string
+                      default: []
+                      description: "Managed policy ARNs to attach"
+                    inlinePolicy:
+                      type: string
+                      description: "JSON inline policy document"
+                    tags:
+                      type: object
+                      additionalProperties:
+                        type: string
+                    overrides:
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+            status:
+              type: object
+              properties:
+                roleArn:
+                  type: string
+                roleName:
+                  type: string

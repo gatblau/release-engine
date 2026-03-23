@@ -1,0 +1,90 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: dns-aws
+  labels:
+    provider: aws
+spec:
+  compositeTypeRef:
+    apiVersion: infrastructure.platform.io/v1alpha1
+    kind: XDNSZone
+  mode: Pipeline
+  pipeline:
+    - step: render
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- $xr := .observed.composite.resource }}
+            {{- $params := $xr.spec.parameters }}
+
+            ---
+            apiVersion: route53.aws.m.upbound.io/v1beta1
+            kind: Zone
+            metadata:
+              name: {{ printf "%s-zone" $xr.metadata.name | quote }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: hosted-zone
+            spec:
+              providerConfigRef:
+                name: {{ ($params.providerConfigRef | default "aws-provider") | quote }}
+                kind: ClusterProviderConfig
+              forProvider:
+                region: {{ $params.region | quote }}
+                name: {{ $params.zoneName | quote }}
+                forceDestroy: false
+                {{- if $params.private }}
+                vpc:
+                  - vpcId: {{ $params.vpcId | quote }}
+                    vpcRegion: {{ $params.region | quote }}
+                {{- end }}
+
+            {{- range $i, $record := $params.records }}
+            ---
+            apiVersion: route53.aws.m.upbound.io/v1beta1
+            kind: Record
+            metadata:
+              name: {{ printf "%s-record-%d" $xr.metadata.name $i | quote }}
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: {{ printf "record-%d" $i }}
+            spec:
+              providerConfigRef:
+                name: {{ ($params.providerConfigRef | default "aws-provider") | quote }}
+                kind: ClusterProviderConfig
+              forProvider:
+                region: {{ $params.region | quote }}
+                zoneIdSelector:
+                  matchControllerRef: true
+                name: {{ $record.name | quote }}
+                type: {{ $record.type | quote }}
+                ttl: {{ ($record.ttl | default 300) }}
+                records:
+                {{- range $record.values }}
+                  - {{ . | quote }}
+                {{- end }}
+            {{- end }}
+
+            {{- $hz := getComposedResource . "hosted-zone" }}
+            {{- if $hz }}
+            ---
+            apiVersion: infrastructure.platform.io/v1alpha1
+            kind: XDNSZone
+            status:
+              {{- with $hz.status.atProvider.zoneId }}
+              zoneId: {{ . | quote }}
+              {{- end }}
+              {{- with $hz.status.atProvider.nameServers }}
+              nameServers:
+              {{- range . }}
+                - {{ . | quote }}
+              {{- end }}
+              {{- end }}
+            {{- end }}
+
+    - step: detect-readiness
+      functionRef:
+        name: function-auto-ready

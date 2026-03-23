@@ -1,7 +1,6 @@
 name: k8s-app
 description: "Kubernetes application and optional data/platform services"
 version: "1.0"
-composition_ref: "composition-k8s-application-v1"
 
 required_capabilities:
   - kubernetes
@@ -9,11 +8,11 @@ required_capabilities:
 optional_capabilities:
   - database
   - cache
-  - object_storage
-  - block_storage
-  - file_storage
+  - objectStorage
+  - blockStorage
+  - fileStorage
   - vpc
-  - load_balancer
+  - loadBalancer
   - dns
   - cdn
   - messaging
@@ -29,9 +28,10 @@ constraints:
   allowed_workload_profiles: [small, medium, large, xlarge]
   allowed_availabilities: [standard, high, critical]
   allowed_residencies: [eu, us, ap, global]
+  allowed_providers: [aws, azure]
   requires_approval: false
   max_cost_monthly: 50000
 
 defaults:
   kubernetes_tier: standard
-  composition_ref: composition-k8s-application-v1
+  default_provider: aws

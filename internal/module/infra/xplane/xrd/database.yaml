@@ -1,0 +1,80 @@
+apiVersion: apiextensions.crossplane.io/v2
+kind: CompositeResourceDefinition
+metadata:
+  name: xdatabases.infrastructure.platform.io
+spec:
+  scope: Namespaced
+  group: infrastructure.platform.io
+  names:
+    kind: XDatabase
+    plural: xdatabases
+  defaultCompositionRef:
+    name: database-aws
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required:
+                - engine
+              properties:
+                region:
+                  type: string
+                  default: eu-west-1
+                providerConfigRef:
+                  type: string
+                  default: aws-provider
+                engine:
+                  type: string
+                  enum:
+                    - postgres
+                    - mysql
+                    - aurora-postgresql
+                    - aurora-mysql
+                engineVersion:
+                  type: string
+                instanceClass:
+                  type: string
+                  default: db.r6g.large
+                allocatedStorage:
+                  type: integer
+                  default: 100
+                storageType:
+                  type: string
+                  default: gp3
+                  enum:
+                    - gp3
+                    - io1
+                    - io2
+                iops:
+                  type: integer
+                multiAZ:
+                  type: boolean
+                  default: true
+                backupRetentionDays:
+                  type: integer
+                  default: 7
+                parameterGroup:
+                  type: string
+                maintenanceWindow:
+                  type: string
+                subnetGroupName:
+                  type: string
+                securityGroupIds:
+                  type: array
+                  items:
+                    type: string
+            status:
+              type: object
+              properties:
+                endpoint:
+                  type: string
+                port:
+                  type: integer
+                resourceId:
+                  type: string

@@ -1,0 +1,110 @@
+apiVersion: apiextensions.crossplane.io/v2
+kind: CompositeResourceDefinition
+metadata:
+  name: xkubernetesclusters.infrastructure.platform.io
+spec:
+  group: infrastructure.platform.io
+  names:
+    kind: XKubernetesCluster
+    plural: xkubernetesclusters
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: [parameters]
+              properties:
+                compositionRef:
+                  type: object
+                  properties:
+                    name:
+                      type: string
+                parameters:
+                  type: object
+                  required: [region, version, subnetIds]
+                  properties:
+                    # --- Core identity ---
+                    clusterName:
+                      type: string
+                      description: "Defaults to XR metadata.name"
+                    region:
+                      type: string
+                    version:
+                      type: string
+                      description: "Kubernetes version, e.g. 1.31"
+                    providerConfigRef:
+                      type: string
+                      default: aws-provider
+
+                    # --- Networking (minimal) ---
+                    subnetIds:
+                      type: array
+                      items:
+                        type: string
+                      description: "Subnets for control plane and default node group"
+                    securityGroupIds:
+                      type: array
+                      items:
+                        type: string
+                      default: []
+
+                    # --- Worker nodes (opinionated single pool) ---
+                    nodePool:
+                      type: object
+                      properties:
+                        instanceType:
+                          type: string
+                          default: m5.large
+                        minNodes:
+                          type: integer
+                          default: 1
+                        maxNodes:
+                          type: integer
+                          default: 3
+                        desiredNodes:
+                          type: integer
+                          default: 2
+                        diskSizeGb:
+                          type: integer
+                          default: 50
+                        capacityType:
+                          type: string
+                          enum: [ON_DEMAND, SPOT]
+                          default: ON_DEMAND
+
+                    # --- Simple toggles ---
+                    publicAccess:
+                      type: boolean
+                      default: false
+                      description: "Enable public API endpoint"
+                    enableOIDC:
+                      type: boolean
+                      default: true
+
+                    # --- Admin access (optional) ---
+                    adminPrincipalArn:
+                      type: string
+                      description: "IAM principal ARN for cluster admin. Omit to skip."
+
+                    # --- Tags ---
+                    tags:
+                      type: object
+                      additionalProperties:
+                        type: string
+                      default: {}
+
+            status:
+              type: object
+              properties:
+                clusterName:
+                  type: string
+                oidcIssuer:
+                  type: string
+                nodeRoleArn:
+                  type: string

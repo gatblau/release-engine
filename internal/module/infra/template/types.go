@@ -3,6 +3,12 @@
 
 package template
 
+// Capability is the interface that all capability parameter structs must implement.
+type Capability interface {
+	IsEnabled() bool
+	GetProvider() string
+}
+
 // ProvisionParams is the canonical input model for infrastructure rendering.
 // Phase 1 includes core/global fields and capability switches used by the
 // engine and always-on policy fragments.
@@ -13,8 +19,7 @@ type ProvisionParams struct {
 	Owner              string            `yaml:"owner"`
 	Environment        string            `yaml:"environment"`
 	WorkloadProfile    string            `yaml:"workload_profile"`
-	TemplateName       string            `yaml:"template_name"`
-	CompositionRef     string            `yaml:"composition_ref"`
+	CatalogueItem      string            `yaml:"catalogue_item"`
 	Namespace          string            `yaml:"namespace"`
 	Residency          string            `yaml:"residency"`
 	PrimaryRegion      string            `yaml:"primary_region"`
@@ -28,7 +33,12 @@ type ProvisionParams struct {
 	EgressMode         string            `yaml:"egress_mode"`
 	DRRequired         bool              `yaml:"dr_required"`
 	BackupRequired     bool              `yaml:"backup_required"`
+	DefaultProvider    string            `yaml:"default_provider"`
 	ExtraTags          map[string]string `yaml:"extra_tags"`
+	CostCentre         string            `yaml:"cost_centre"`
+	BusinessUnit       string            `yaml:"business_unit"`
+	Project            string            `yaml:"project"`
+	TTL                string            `yaml:"ttl"`
 
 	// Capability switches (used in later phases and partial validation now)
 	Kubernetes    KubernetesParams    `yaml:"kubernetes"`
@@ -50,6 +60,7 @@ type ProvisionParams struct {
 
 type KubernetesParams struct {
 	Enabled       bool   `yaml:"enabled"`
+	Provider      string `yaml:"provider"`
 	Tier          string `yaml:"tier"`
 	Size          string `yaml:"size"`
 	MultiAZ       bool   `yaml:"multi_az"`
@@ -59,6 +70,7 @@ type KubernetesParams struct {
 
 type VMParams struct {
 	Enabled         bool        `yaml:"enabled"`
+	Provider        string      `yaml:"provider"`
 	Count           int         `yaml:"count"`
 	InstanceFamily  string      `yaml:"instance_family"`
 	Size            string      `yaml:"size"`
@@ -97,6 +109,7 @@ type VMAutoScale struct {
 
 type DatabaseParams struct {
 	Enabled             bool   `yaml:"enabled"`
+	Provider            string `yaml:"provider"`
 	Engine              string `yaml:"engine"`
 	Tier                string `yaml:"tier"`
 	StorageGiB          int    `yaml:"storage_gib"`
@@ -111,6 +124,7 @@ type DatabaseParams struct {
 
 type ObjectStoreParams struct {
 	Enabled       bool   `yaml:"enabled"`
+	Provider      string `yaml:"provider"`
 	Class         string `yaml:"class"`
 	Versioning    bool   `yaml:"versioning"`
 	RetentionDays int    `yaml:"retention_days"`
@@ -118,8 +132,9 @@ type ObjectStoreParams struct {
 }
 
 type BlockStoreParams struct {
-	Enabled bool          `yaml:"enabled"`
-	Volumes []BlockVolume `yaml:"volumes"`
+	Enabled  bool          `yaml:"enabled"`
+	Provider string        `yaml:"provider"`
+	Volumes  []BlockVolume `yaml:"volumes"`
 }
 
 type BlockVolume struct {
@@ -135,6 +150,7 @@ type BlockVolume struct {
 
 type FileStoreParams struct {
 	Enabled         bool   `yaml:"enabled"`
+	Provider        string `yaml:"provider"`
 	PerformanceMode string `yaml:"performance_mode"`
 	ThroughputMode  string `yaml:"throughput_mode"`
 	ThroughputMiBs  int    `yaml:"throughput_mibs"`
@@ -145,6 +161,7 @@ type FileStoreParams struct {
 
 type VPCParams struct {
 	Enabled         bool      `yaml:"enabled"`
+	Provider        string    `yaml:"provider"`
 	CIDR            string    `yaml:"cidr"`
 	PrivateSubnets  int       `yaml:"private_subnets"`
 	PublicSubnets   int       `yaml:"public_subnets"`
@@ -162,6 +179,7 @@ type VPCPeer struct {
 
 type MessagingParams struct {
 	Enabled     bool   `yaml:"enabled"`
+	Provider    string `yaml:"provider"`
 	Tier        string `yaml:"tier"`
 	QueueCount  int    `yaml:"queue_count"`
 	TopicCount  int    `yaml:"topic_count"`
@@ -173,6 +191,7 @@ type MessagingParams struct {
 
 type CacheParams struct {
 	Enabled               bool   `yaml:"enabled"`
+	Provider              string `yaml:"provider"`
 	Engine                string `yaml:"engine"`
 	Tier                  string `yaml:"tier"`
 	NodeType              string `yaml:"node_type"`
@@ -183,6 +202,7 @@ type CacheParams struct {
 
 type DNSParams struct {
 	Enabled  bool     `yaml:"enabled"`
+	Provider string   `yaml:"provider"`
 	ZoneName string   `yaml:"zone_name"`
 	Private  bool     `yaml:"private"`
 	Records  []DNSRec `yaml:"records"`
@@ -197,6 +217,7 @@ type DNSRec struct {
 
 type LoadBalancerParams struct {
 	Enabled     bool          `yaml:"enabled"`
+	Provider    string        `yaml:"provider"`
 	Type        string        `yaml:"type"`
 	Scheme      string        `yaml:"scheme"`
 	HTTPS       bool          `yaml:"https"`
@@ -216,6 +237,7 @@ type LBHealthCheck struct {
 
 type CDNParams struct {
 	Enabled        bool     `yaml:"enabled"`
+	Provider       string   `yaml:"provider"`
 	OriginType     string   `yaml:"origin_type"`
 	PriceClass     string   `yaml:"price_class"`
 	CachePolicyTTL int      `yaml:"cache_ttl"`
@@ -225,6 +247,7 @@ type CDNParams struct {
 
 type IdentityParams struct {
 	Enabled             bool        `yaml:"enabled"`
+	Provider            string      `yaml:"provider"`
 	Type                string      `yaml:"type"`
 	ServiceAccountCount int         `yaml:"service_account_count"`
 	Policies            []IAMPolicy `yaml:"policies"`
@@ -251,6 +274,7 @@ type SecretsParams struct {
 
 type ObservabilityParams struct {
 	Enabled                bool     `yaml:"enabled"`
+	Provider               string   `yaml:"provider"`
 	MetricsRetentionDays   int      `yaml:"metrics_retention_days"`
 	MetricsResolution      string   `yaml:"metrics_resolution"`
 	CustomMetricNamespaces []string `yaml:"custom_metric_namespaces"`
@@ -261,4 +285,70 @@ type ObservabilityParams struct {
 	TracingSampleRate      float64  `yaml:"tracing_sample_rate"`
 	TracingProvider        string   `yaml:"tracing_provider"`
 	DashboardEnabled       bool     `yaml:"dashboard_enabled"`
+}
+
+func (k KubernetesParams) IsEnabled() bool     { return k.Enabled }
+func (k KubernetesParams) GetProvider() string { return k.Provider }
+
+func (v VMParams) IsEnabled() bool     { return v.Enabled }
+func (v VMParams) GetProvider() string { return v.Provider }
+
+func (d DatabaseParams) IsEnabled() bool     { return d.Enabled }
+func (d DatabaseParams) GetProvider() string { return d.Provider }
+
+func (o ObjectStoreParams) IsEnabled() bool     { return o.Enabled }
+func (o ObjectStoreParams) GetProvider() string { return o.Provider }
+
+func (b BlockStoreParams) IsEnabled() bool     { return b.Enabled }
+func (b BlockStoreParams) GetProvider() string { return b.Provider }
+
+func (f FileStoreParams) IsEnabled() bool     { return f.Enabled }
+func (f FileStoreParams) GetProvider() string { return f.Provider }
+
+func (v VPCParams) IsEnabled() bool     { return v.Enabled }
+func (v VPCParams) GetProvider() string { return v.Provider }
+
+func (m MessagingParams) IsEnabled() bool     { return m.Enabled }
+func (m MessagingParams) GetProvider() string { return m.Provider }
+
+func (c CacheParams) IsEnabled() bool     { return c.Enabled }
+func (c CacheParams) GetProvider() string { return c.Provider }
+
+func (d DNSParams) IsEnabled() bool     { return d.Enabled }
+func (d DNSParams) GetProvider() string { return d.Provider }
+
+func (l LoadBalancerParams) IsEnabled() bool     { return l.Enabled }
+func (l LoadBalancerParams) GetProvider() string { return l.Provider }
+
+func (c CDNParams) IsEnabled() bool     { return c.Enabled }
+func (c CDNParams) GetProvider() string { return c.Provider }
+
+func (i IdentityParams) IsEnabled() bool     { return i.Enabled }
+func (i IdentityParams) GetProvider() string { return i.Provider }
+
+func (s SecretsParams) IsEnabled() bool     { return s.Enabled }
+func (s SecretsParams) GetProvider() string { return s.Provider }
+
+func (o ObservabilityParams) IsEnabled() bool     { return o.Enabled }
+func (o ObservabilityParams) GetProvider() string { return o.Provider }
+
+// Capabilities returns a map of capability name to Capability interface for all capabilities.
+func (p *ProvisionParams) Capabilities() map[string]Capability {
+	return map[string]Capability{
+		"blockStorage":  p.BlockStore,
+		"cache":         p.Cache,
+		"cdn":           p.CDN,
+		"database":      p.Database,
+		"dns":           p.DNS,
+		"fileStorage":   p.FileStore,
+		"identity":      p.Identity,
+		"kubernetes":    p.Kubernetes,
+		"loadBalancer":  p.LoadBalancer,
+		"messaging":     p.Messaging,
+		"objectStorage": p.ObjectStore,
+		"observability": p.Observability,
+		"secrets":       p.Secrets,
+		"vm":            p.VM,
+		"vpc":           p.VPC,
+	}
 }

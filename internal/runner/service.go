@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gatblau/release-engine/internal/connector"
 	"github.com/gatblau/release-engine/internal/db"
 	"github.com/gatblau/release-engine/internal/registry"
 	"github.com/gorhill/cronexpr"
@@ -24,19 +25,22 @@ type RunnerService interface {
 }
 
 type runnerService struct {
-	pool       db.Pool
-	stepAPI    StepAPI
-	registry   registry.ModuleRegistry
-	stepAPIFac func(jobID, runID string, attempt int) StepAPI
+	pool              db.Pool
+	connectorRegistry connector.ConnectorRegistry
+	stepAPI           StepAPI
+	registry          registry.ModuleRegistry
+	stepAPIFac        func(jobID, runID string, attempt int) StepAPI
 }
 
-func NewRunnerService(pool db.Pool, stepAPI StepAPI, registry registry.ModuleRegistry) RunnerService {
+func NewRunnerService(pool db.Pool, familyRegistry connector.FamilyRegistry, stepAPI StepAPI, registry registry.ModuleRegistry) RunnerService {
 	return &runnerService{
-		pool:     pool,
-		stepAPI:  stepAPI,
-		registry: registry,
+		pool:              pool,
+		connectorRegistry: nil, // Not used anymore
+		stepAPI:           stepAPI,
+		registry:          registry,
 		stepAPIFac: func(jobID, runID string, attempt int) StepAPI {
-			return NewStepAPIAdapter(pool, jobID, runID, attempt)
+			// Return the StepAPI adapter directly - no need for DualStepAPI wrapper
+			return NewStepAPIAdapter(pool, familyRegistry, jobID, runID, attempt)
 		},
 	}
 }
@@ -77,6 +81,13 @@ func (s *runnerService) RunJob(ctx context.Context, jobID string, runID string) 
 	stepAPI := s.stepAPI
 	if stepAPI == nil && s.stepAPIFac != nil {
 		stepAPI = s.stepAPIFac(jobID, runID, attempt)
+	}
+
+	// If stepAPI supports job context setting, set it
+	if setter, ok := stepAPI.(interface {
+		SetJobContext(jobID, runID string, attempt int)
+	}); ok {
+		setter.SetJobContext(jobID, runID, attempt)
 	}
 
 	// 3. Execute module workflow (modules orchestrate via StepAPI).

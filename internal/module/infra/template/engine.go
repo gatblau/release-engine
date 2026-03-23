@@ -5,10 +5,8 @@ package template
 
 import (
 	"fmt"
-	"sort"
 
 	"github.com/gatblau/release-engine/internal/module/infra/template/catalog"
-	"gopkg.in/yaml.v3"
 )
 
 // Fragment is implemented by each capability/policy renderer.
@@ -59,6 +57,7 @@ func (e *Engine) Render(params *ProvisionParams) ([]byte, error) {
 	}
 
 	specParts := make(map[string]any)
+	capabilityParts := make(map[string]any)
 	for _, frag := range e.fragments {
 		if !frag.Applicable(params) {
 			continue
@@ -75,11 +74,20 @@ func (e *Engine) Render(params *ProvisionParams) ([]byte, error) {
 
 		for k, v := range part {
 			specParts[k] = v
+			if _, ok := paramBuilders[k]; ok {
+				capabilityParts[k] = v
+			}
 		}
 	}
 
-	xr := BuildXR(params, specParts)
-	return marshalDeterministic(xr)
+	docs, err := BuildXRs(params, capabilityParts)
+	if err != nil {
+		return nil, err
+	}
+	if len(docs) == 0 {
+		return nil, fmt.Errorf("no supported Crossplane XRD capability enabled")
+	}
+	return marshalDeterministicDocuments(docs)
 }
 
 func validateAtLeastOneCapability(params *ProvisionParams) error {
@@ -123,7 +131,7 @@ func (e *Engine) applyCatalog(params *ProvisionParams) error {
 		return nil
 	}
 
-	catName := params.TemplateName
+	catName := params.CatalogueItem
 	if catName == "" {
 		return nil
 	}
@@ -135,15 +143,30 @@ func (e *Engine) applyCatalog(params *ProvisionParams) error {
 
 	applyCatalogDefaults(params, cat)
 
-	if params.CompositionRef == "" {
-		params.CompositionRef = cat.CompositionRef
-	}
-
 	if err := cat.ValidateParams(params.Environment, params.WorkloadProfile, params.Availability, params.Residency); err != nil {
 		return fmt.Errorf("catalog validation failed: %w", err)
 	}
 
-	if err := validateCatalogCapabilities(params, cat); err != nil {
+	// Build capability info map for validation
+	capabilities := map[string]catalog.CapabilityInfo{
+		"blockStorage":  {Enabled: params.BlockStore.Enabled, Provider: params.BlockStore.Provider},
+		"cache":         {Enabled: params.Cache.Enabled, Provider: params.Cache.Provider},
+		"cdn":           {Enabled: params.CDN.Enabled, Provider: params.CDN.Provider},
+		"database":      {Enabled: params.Database.Enabled, Provider: params.Database.Provider},
+		"dns":           {Enabled: params.DNS.Enabled, Provider: params.DNS.Provider},
+		"fileStorage":   {Enabled: params.FileStore.Enabled, Provider: params.FileStore.Provider},
+		"identity":      {Enabled: params.Identity.Enabled, Provider: params.Identity.Provider},
+		"kubernetes":    {Enabled: params.Kubernetes.Enabled, Provider: params.Kubernetes.Provider},
+		"loadBalancer":  {Enabled: params.LoadBalancer.Enabled, Provider: params.LoadBalancer.Provider},
+		"messaging":     {Enabled: params.Messaging.Enabled, Provider: params.Messaging.Provider},
+		"objectStorage": {Enabled: params.ObjectStore.Enabled, Provider: params.ObjectStore.Provider},
+		"observability": {Enabled: params.Observability.Enabled, Provider: params.Observability.Provider},
+		"secrets":       {Enabled: params.Secrets.Enabled, Provider: params.Secrets.Provider},
+		"vm":            {Enabled: params.VM.Enabled, Provider: params.VM.Provider},
+		"vpc":           {Enabled: params.VPC.Enabled, Provider: params.VPC.Provider},
+	}
+
+	if err := cat.ValidateCapabilities(capabilities, params.DefaultProvider); err != nil {
 		return fmt.Errorf("catalog capability validation failed: %w", err)
 	}
 
@@ -155,11 +178,6 @@ func applyCatalogDefaults(params *ProvisionParams, cat *catalog.TemplateCatalog)
 		return
 	}
 
-	if params.CompositionRef == "" {
-		if v, ok := cat.Defaults["composition_ref"].(string); ok && v != "" {
-			params.CompositionRef = v
-		}
-	}
 	if params.Kubernetes.Tier == "" {
 		if v, ok := cat.Defaults["kubernetes_tier"].(string); ok {
 			params.Kubernetes.Tier = v
@@ -198,92 +216,6 @@ func applyCatalogDefaults(params *ProvisionParams, cat *catalog.TemplateCatalog)
 	if !params.ObjectStore.Versioning {
 		if v, ok := cat.Defaults["object_storage_versioning"].(bool); ok {
 			params.ObjectStore.Versioning = v
-		}
-	}
-}
-
-func validateCatalogCapabilities(params *ProvisionParams, cat *catalog.TemplateCatalog) error {
-	capabilityMap := map[string]bool{
-		"kubernetes":     params.Kubernetes.Enabled,
-		"vm":             params.VM.Enabled,
-		"database":       params.Database.Enabled,
-		"object_storage": params.ObjectStore.Enabled,
-		"object_store":   params.ObjectStore.Enabled,
-		"block_storage":  params.BlockStore.Enabled,
-		"block_store":    params.BlockStore.Enabled,
-		"file_storage":   params.FileStore.Enabled,
-		"file_store":     params.FileStore.Enabled,
-		"vpc":            params.VPC.Enabled,
-		"messaging":      params.Messaging.Enabled,
-		"cache":          params.Cache.Enabled,
-		"dns":            params.DNS.Enabled,
-		"load_balancer":  params.LoadBalancer.Enabled,
-		"cdn":            params.CDN.Enabled,
-		"identity":       params.Identity.Enabled,
-		"secrets":        params.Secrets.Enabled,
-		"observability":  params.Observability.Enabled,
-	}
-
-	for _, forbidden := range cat.ForbiddenCapabilities {
-		if capabilityMap[forbidden] {
-			return fmt.Errorf("capability %q is forbidden for template %q", forbidden, cat.Name)
-		}
-	}
-
-	for _, required := range cat.RequiredCapabilities {
-		if !capabilityMap[required] {
-			return fmt.Errorf("capability %q is required for template %q", required, cat.Name)
-		}
-	}
-
-	return nil
-}
-
-// marshalDeterministic produces YAML with sorted map keys for stable output.
-func marshalDeterministic(v any) ([]byte, error) {
-	node := &yaml.Node{}
-	raw, err := yaml.Marshal(v)
-	if err != nil {
-		return nil, err
-	}
-	if err := yaml.Unmarshal(raw, node); err != nil {
-		return nil, err
-	}
-	sortYAMLNode(node)
-	return yaml.Marshal(node)
-}
-
-func sortYAMLNode(node *yaml.Node) {
-	if node == nil {
-		return
-	}
-
-	if node.Kind == yaml.DocumentNode {
-		for _, child := range node.Content {
-			sortYAMLNode(child)
-		}
-		return
-	}
-
-	if node.Kind == yaml.MappingNode {
-		pairs := make([]struct{ Key, Value *yaml.Node }, len(node.Content)/2)
-		for i := 0; i < len(node.Content); i += 2 {
-			pairs[i/2] = struct{ Key, Value *yaml.Node }{node.Content[i], node.Content[i+1]}
-		}
-		sort.Slice(pairs, func(i, j int) bool {
-			return pairs[i].Key.Value < pairs[j].Key.Value
-		})
-		for i, p := range pairs {
-			node.Content[i*2] = p.Key
-			node.Content[i*2+1] = p.Value
-			sortYAMLNode(p.Value)
-		}
-		return
-	}
-
-	if node.Kind == yaml.SequenceNode {
-		for _, child := range node.Content {
-			sortYAMLNode(child)
 		}
 	}
 }

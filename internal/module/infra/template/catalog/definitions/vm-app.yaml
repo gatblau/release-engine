@@ -1,18 +1,17 @@
 name: vm-app
 description: "VM workload baseline"
 version: "1.0"
-composition_ref: "composition-vm-app-v1"
 
 required_capabilities:
   - vm
 
 optional_capabilities:
   - database
-  - object_storage
-  - block_storage
-  - file_storage
+  - objectStorage
+  - blockStorage
+  - fileStorage
   - vpc
-  - load_balancer
+  - loadBalancer
   - dns
   - identity
   - secrets
@@ -27,8 +26,9 @@ constraints:
   allowed_workload_profiles: [small, medium, large, xlarge]
   allowed_availabilities: [standard, high]
   allowed_residencies: [eu, us]
+  allowed_providers: [aws, azure]
   requires_approval: true
   max_cost_monthly: 30000
 
 defaults:
-  composition_ref: composition-vm-app-v1
+  default_provider: aws

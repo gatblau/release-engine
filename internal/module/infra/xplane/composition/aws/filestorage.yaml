@@ -1,0 +1,88 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: xfilestorage-aws-efs
+  labels:
+    provider: aws
+    service: efs
+    resource: filesystem
+spec:
+  compositeTypeRef:
+    apiVersion: infrastructure.platform.io/v1alpha1
+    kind: XFileStorage
+  mode: Pipeline
+  pipeline:
+    - step: render-efs-filesystem
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          options:
+            - missingkey=error
+          template: |
+            {{- $xr := getCompositeResource . -}}
+            {{- $p := $xr.spec.parameters -}}
+            {{- $providerConfigName := dig "providerConfigRef" "name" "aws-provider" $p -}}
+            {{- $providerConfigKind := dig "providerConfigRef" "kind" "ClusterProviderConfig" $p -}}
+            {{- $nameTag := default $xr.metadata.name $p.nameTag -}}
+
+            ---
+            apiVersion: efs.aws.m.upbound.io/v1beta1
+            kind: FileSystem
+            metadata:
+              name: {{ printf "%s-fs" $xr.metadata.name | trunc 63 | trimSuffix "-" }}
+              namespace: {{ $xr.metadata.namespace }}
+              annotations:
+                {{ setResourceNameAnnotation "filesystem" }}
+              labels:
+                infrastructure.platform.io/composite: {{ $xr.metadata.name | quote }}
+                infrastructure.platform.io/resource-type: "file-storage"
+            spec:
+              providerConfigRef:
+                name: {{ $providerConfigName | quote }}
+                kind: {{ $providerConfigKind | quote }}
+              forProvider:
+                region: {{ $p.region | quote }}
+                encrypted: {{ default true $p.encrypted }}
+                performanceMode: {{ default "generalPurpose" $p.performanceMode | quote }}
+                throughputMode: {{ default "bursting" $p.throughputMode | quote }}
+            {{- if $p.creationToken }}
+                creationToken: {{ $p.creationToken | quote }}
+            {{- end }}
+            {{- if $p.kmsKeyId }}
+                kmsKeyId: {{ $p.kmsKeyId | quote }}
+            {{- end }}
+            {{- if $p.provisionedThroughputInMibps }}
+                provisionedThroughputInMibps: {{ $p.provisionedThroughputInMibps }}
+            {{- end }}
+            {{- if $p.availabilityZoneName }}
+                availabilityZoneName: {{ $p.availabilityZoneName | quote }}
+            {{- end }}
+            {{- if $p.lifecyclePolicy }}
+                lifecyclePolicy:
+            {{- range $lp := $p.lifecyclePolicy }}
+                  - {{- if $lp.transitionToArchive }}
+                    transitionToArchive: {{ $lp.transitionToArchive | quote }}
+                    {{- end }}
+                    {{- if $lp.transitionToIa }}
+                    transitionToIa: {{ $lp.transitionToIa | quote }}
+                    {{- end }}
+                    {{- if $lp.transitionToPrimaryStorageClass }}
+                    transitionToPrimaryStorageClass: {{ $lp.transitionToPrimaryStorageClass | quote }}
+                    {{- end }}
+            {{- end }}
+            {{- end }}
+                tags:
+                  Name: {{ $nameTag | quote }}
+            {{- if $p.tags }}
+            {{- range $k, $v := $p.tags }}
+                  {{ $k }}: {{ $v | quote }}
+            {{- end }}
+            {{- end }}
+
+    - step: detect-ready
+      functionRef:
+        name: function-auto-ready

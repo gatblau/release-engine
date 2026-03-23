@@ -1,0 +1,24 @@
+apiVersion: infrastructure.platform.io/v1alpha1
+kind: XLoadBalancer
+metadata:
+  name: api-gateway-lb
+  namespace: team-alpha
+spec:
+  compositionRef:
+    name: xloadbalancer-aws-alb
+  parameters:
+    region: us-east-1
+    vpcId: vpc-abc123
+    subnetIds:
+      - subnet-aaa
+      - subnet-bbb
+    securityGroupIds:
+      - sg-xxx
+    listener:
+      certificateArn: arn:aws:acm:us-east-1:123456789012:certificate/abc-def
+    target:
+      port: 8080
+      healthCheckPath: /actuator/health
+    tags:
+      team: alpha
+      environment: production

@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dns
+---
+apiVersion: infrastructure.platform.io/v1alpha1
+kind: XDNSZone
+metadata:
+  name: example-com
+  namespace: dns
+spec:
+  parameters:
+    providerConfigRef: aws-provider
+    region: us-east-1
+    zoneName: example.com
+    private: false
+    records:
+      - name: www.example.com
+        type: A
+        ttl: 300
+        values:
+          - "203.0.113.10"
+      - name: api.example.com
+        type: CNAME
+        ttl: 300
+        values:
+          - "www.example.com"

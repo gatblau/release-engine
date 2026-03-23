@@ -1,0 +1,105 @@
+apiVersion: apiextensions.crossplane.io/v2
+kind: CompositeResourceDefinition
+metadata:
+  name: xfilestorages.infrastructure.platform.io
+spec:
+  group: infrastructure.platform.io
+  scope: Namespaced
+  names:
+    kind: XFileStorage
+    plural: xfilestorages
+  defaultCompositionRef:
+    name: xfilestorage-aws-efs
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required:
+                - parameters
+              properties:
+                parameters:
+                  type: object
+                  required:
+                    - region
+                  properties:
+                    providerConfigRef:
+                      type: string
+                      default: aws-provider
+                    region:
+                      type: string
+                      description: AWS region in which the EFS file system is managed.
+                    creationToken:
+                      type: string
+                      description: Optional idempotency token for EFS file system creation.
+                    encrypted:
+                      type: boolean
+                      default: true
+                    kmsKeyId:
+                      type: string
+                      description: Optional KMS key ARN or ID. When set, encryption must be enabled.
+                    performanceMode:
+                      type: string
+                      default: generalPurpose
+                      enum:
+                        - generalPurpose
+                        - maxIO
+                    throughputMode:
+                      type: string
+                      default: bursting
+                      enum:
+                        - bursting
+                        - provisioned
+                        - elastic
+                    provisionedThroughputInMibps:
+                      type: number
+                      minimum: 0
+                      description: Required by AWS/provider behavior when throughputMode is provisioned.
+                    availabilityZoneName:
+                      type: string
+                      description: Optional availability zone for One Zone file systems.
+                    nameTag:
+                      type: string
+                      description: Optional Name tag value. Defaults to the XR metadata.name.
+                    lifecyclePolicy:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          transitionToArchive:
+                            type: string
+                            enum:
+                              - AFTER_1_DAY
+                              - AFTER_7_DAYS
+                              - AFTER_14_DAYS
+                              - AFTER_30_DAYS
+                              - AFTER_60_DAYS
+                              - AFTER_90_DAYS
+                              - AFTER_180_DAYS
+                              - AFTER_270_DAYS
+                              - AFTER_365_DAYS
+                          transitionToIa:
+                            type: string
+                            enum:
+                              - AFTER_1_DAY
+                              - AFTER_7_DAYS
+                              - AFTER_14_DAYS
+                              - AFTER_30_DAYS
+                              - AFTER_60_DAYS
+                              - AFTER_90_DAYS
+                              - AFTER_180_DAYS
+                              - AFTER_270_DAYS
+                              - AFTER_365_DAYS
+                          transitionToPrimaryStorageClass:
+                            type: string
+                            enum:
+                              - AFTER_1_ACCESS
+                    tags:
+                      type: object
+                      additionalProperties:
+                        type: string

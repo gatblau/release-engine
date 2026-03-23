@@ -1,0 +1,17 @@
+apiVersion: infrastructure.platform.io/v1alpha1
+kind: XVirtualMachine
+metadata:
+  name: api-server-01
+  namespace: team-alpha
+spec:
+  compositionRef:
+    name: xvirtualmachine-aws-ec2
+  parameters:
+    region: us-east-1
+    instanceType: t3.medium
+    subnetId: subnet-abc123
+    keyPairName: team-alpha-key
+    diskSizeGb: 50
+    tags:
+      team: alpha
+      environment: staging

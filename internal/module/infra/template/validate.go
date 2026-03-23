@@ -6,6 +6,7 @@ package template
 import (
 	"fmt"
 	"strings"
+	"time"
 )
 
 // Validate checks global parameter constraints before any fragment runs.
@@ -31,11 +32,8 @@ func Validate(params *ProvisionParams) error {
 	if params.Environment == "" {
 		errs = append(errs, "environment is required")
 	}
-	if params.TemplateName == "" {
-		errs = append(errs, "template_name is required")
-	}
-	if params.CompositionRef == "" {
-		errs = append(errs, "composition_ref is required")
+	if params.CatalogueItem == "" {
+		errs = append(errs, "catalogue_item is required")
 	}
 	if params.Namespace == "" {
 		errs = append(errs, "namespace is required")
@@ -55,6 +53,9 @@ func Validate(params *ProvisionParams) error {
 	if params.EgressMode == "" {
 		errs = append(errs, "egress_mode is required")
 	}
+	if params.CostCentre == "" {
+		errs = append(errs, "cost_centre is required for FinOps cost allocation")
+	}
 
 	if params.DRRequired && params.SecondaryRegion == "" {
 		errs = append(errs, "secondary_region required when dr_required is true")
@@ -67,6 +68,21 @@ func Validate(params *ProvisionParams) error {
 	}
 	if params.DataClassification == "restricted" && !params.BackupRequired {
 		errs = append(errs, "backup_required must be true for restricted data classification")
+	}
+
+	// Validate TTL format if provided
+	if params.TTL != "" {
+		if _, err := time.Parse("2006-01-02", params.TTL); err != nil {
+			errs = append(errs, fmt.Sprintf("ttl must be in ISO 8601 date format (YYYY-MM-DD), got: %s", params.TTL))
+		}
+	}
+
+	// Validate cost centre pattern (basic validation - can be enhanced)
+	if params.CostCentre != "" && !strings.Contains(params.CostCentre, "-") {
+		// Warn but don't fail - some cost centres might not follow this pattern
+		// This is just a suggestion for best practice
+		// We'll add a log message or handle this appropriately
+		fmt.Printf("Warning: cost centre '%s' does not follow expected pattern (contains '-')\n", params.CostCentre)
 	}
 
 	if len(errs) > 0 {

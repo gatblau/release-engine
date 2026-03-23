@@ -1,0 +1,15 @@
+# cfg_infra.yaml - Production environment
+apiVersion: module.config/v1
+module: infra
+
+# Production environment variables (optimized for production reliability)
+vars:
+  health_timeout: 600s  # 10 minutes
+  poll_interval: 60s    # 1 minute
+
+# Production connector implementations (real, production-grade connectors)
+connectors:
+  families:
+    git: github           # Real GitHub API for production repos
+    policy: opa           # Production OPA policy service
+    webhook: http         # Production webhook service with retries

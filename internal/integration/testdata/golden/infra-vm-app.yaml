@@ -1,0 +1,61 @@
+apiVersion: infrastructure.platform.io/v1alpha1
+kind: XVirtualMachine
+metadata:
+    annotations:
+        platform.io/composition-ref: vm-aws
+        platform.io/contract-version: v1
+    labels:
+        app.kubernetes.io/managed-by: release-engine
+        platform.io/catalogue-item: vm-app
+        platform.io/environment: production
+        platform.io/tenant: core-systems
+    name: vm-legacy-prod-vm
+    namespace: platform-system
+spec:
+    compositionRef:
+        name: vm-aws
+    parameters:
+        ami: ubuntu-22.04
+        diskSizeGb: 30
+        diskType: gp3
+        iamRolePolicies:
+            - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        instanceType: m7.2xlarge
+        keyPairName: ""
+        overrides: {}
+        providerConfigRef: aws-provider
+        publicIp: false
+        region: eu-west-1
+        securityGroupIds: []
+        subnetId: subnet-from-tier-private
+        tags: {}
+        userData: ""
+---
+apiVersion: infrastructure.platform.io/v1alpha1
+kind: XVPCNetwork
+metadata:
+    annotations:
+        platform.io/composition-ref: vpc-aws
+        platform.io/contract-version: v1
+    labels:
+        app.kubernetes.io/managed-by: release-engine
+        platform.io/catalogue-item: vm-app
+        platform.io/environment: production
+        platform.io/tenant: core-systems
+    name: vm-legacy-prod-vpc
+    namespace: platform-system
+spec:
+    compositionRef:
+        name: vpc-aws
+    parameters:
+        availabilityZones:
+            - eu-west-1a
+            - eu-west-1b
+            - eu-west-1c
+        cidr: 10.42.0.0/16
+        flowLogs: true
+        natGateways: 1
+        privateSubnets: 3
+        providerConfigRef: aws-provider
+        publicSubnets: 3
+        region: eu-west-1

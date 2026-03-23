@@ -10,76 +10,51 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/gatblau/release-engine/internal/connector"
 	"github.com/gatblau/release-engine/internal/db"
+	"github.com/gatblau/release-engine/internal/logger"
+	"github.com/gatblau/release-engine/internal/stepapi"
 	"github.com/jackc/pgx/v4"
+	"go.uber.org/zap"
 )
 
-// ApprovalOutcome defines the result of a human approval decision.
-type ApprovalOutcome struct {
-	Decision      string    `json:"decision"` // "approved" or "rejected"
-	Approver      string    `json:"approver"`
-	Justification string    `json:"justification"`
-	DecidedAt     time.Time `json:"decided_at"`
-}
-
-// ApprovalRequest defines the context payload for approval gates.
-type ApprovalRequest struct {
-	Summary     string            `json:"summary"`
-	Detail      string            `json:"detail"`
-	BlastRadius string            `json:"blast_radius"`
-	PolicyRef   string            `json:"policy_ref"`
-	Metadata    map[string]string `json:"metadata"`
-}
-
-// ConnectorRequest is the connector invocation payload.
-type ConnectorRequest struct {
-	Connector string         `json:"connector"`
-	Operation string         `json:"operation"`
-	Input     map[string]any `json:"input"`
-}
-
-// ConnectorResult is the normalized connector call result.
-type ConnectorResult struct {
-	Status string         `json:"status"`
-	Output map[string]any `json:"output,omitempty"`
-	Error  *struct {
-		Code    string `json:"code"`
-		Message string `json:"message"`
-	} `json:"error,omitempty"`
-}
-
 // StepAPI defines the module-facing execution interface.
-type StepAPI interface {
-	BeginStep(stepKey string) error
-	EndStepOK(stepKey string, output map[string]any) error
-	EndStepErr(stepKey, code, msg string) error
-	CallConnector(ctx context.Context, req ConnectorRequest) (*ConnectorResult, error)
-	SetContext(key string, value any) error
-	GetContext(key string) (any, bool)
-	IsCancelled() bool
-	// WaitForApproval parks the execution until an approval decision is recorded.
-	WaitForApproval(ctx context.Context, req ApprovalRequest) (ApprovalOutcome, error)
-}
+// This is an alias to the shared stepapi.StepAPI interface.
+type StepAPI = stepapi.StepAPI
 
 type stepAPIAdapter struct {
-	pool         db.Pool
-	jobID        string
-	runID        string
-	attempt      int
-	currentStep  string
-	contextStore map[string]any
-	pollInterval time.Duration
+	pool           db.Pool
+	familyRegistry connector.FamilyRegistry
+	jobID          string
+	runID          string
+	attempt        int
+	currentStep    string
+	contextStore   map[string]any
+	pollInterval   time.Duration
+	logger         *zap.Logger
 }
 
 // NewStepAPIAdapter creates the module-facing runtime API for a specific job run.
-func NewStepAPIAdapter(pool db.Pool, jobID, runID string, attempt int) StepAPI {
+func NewStepAPIAdapter(pool db.Pool, familyRegistry connector.FamilyRegistry, jobID, runID string, attempt int) StepAPI {
+	// Create a logger for the module execution
+	loggerFactory, err := logger.NewFactory("info", "console")
+	var log *zap.Logger
+	if err != nil {
+		// Fallback to no-op logger if factory creation fails
+		log = zap.NewNop()
+	} else {
+		log = loggerFactory.New(fmt.Sprintf("module.job.%s", jobID))
+	}
+
 	return &stepAPIAdapter{
-		pool:         pool,
-		jobID:        jobID,
-		runID:        runID,
-		attempt:      attempt,
-		contextStore: make(map[string]any),
-		pollInterval: 500 * time.Millisecond,
+		pool:           pool,
+		familyRegistry: familyRegistry,
+		jobID:          jobID,
+		runID:          runID,
+		attempt:        attempt,
+		contextStore:   make(map[string]any),
+		pollInterval:   500 * time.Millisecond,
+		logger:         log,
 	}
 }
 
@@ -144,8 +119,66 @@ func (a *stepAPIAdapter) EndStepErr(stepKey, code, msg string) error {
 	return nil
 }
 
-func (a *stepAPIAdapter) CallConnector(ctx context.Context, req ConnectorRequest) (*ConnectorResult, error) {
-	return nil, fmt.Errorf("connector calls are not implemented yet")
+func (a *stepAPIAdapter) CallConnector(ctx context.Context, req stepapi.ConnectorRequest) (*stepapi.ConnectorResult, error) {
+	// Look up connector via family registry
+	conn, err := a.familyRegistry.Resolve(req.Connector)
+	if err != nil {
+		return &stepapi.ConnectorResult{
+			Status: "error",
+			Error: &struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			}{
+				Code:    "CONNECTOR_NOT_FOUND",
+				Message: fmt.Sprintf("connector family not resolved: %s", req.Connector),
+			},
+		}, nil
+	}
+
+	// Validate input
+	if err := conn.Validate(req.Operation, req.Input); err != nil {
+		return &stepapi.ConnectorResult{
+			Status: "error",
+			Error: &struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			}{
+				Code:    "VALIDATION_FAILED",
+				Message: fmt.Sprintf("validation failed: %v", err),
+			},
+		}, nil
+	}
+
+	// Execute connector
+	result, err := conn.Execute(ctx, req.Operation, req.Input)
+	if err != nil {
+		return &stepapi.ConnectorResult{
+			Status: "error",
+			Error: &struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			}{
+				Code:    "EXECUTION_FAILED",
+				Message: fmt.Sprintf("execution failed: %v", err),
+			},
+		}, nil
+	}
+
+	// Convert connector.ConnectorResult to stepapi.ConnectorResult
+	runnerResult := &stepapi.ConnectorResult{
+		Status: result.Status,
+		Output: result.Output,
+	}
+	if result.Error != nil {
+		runnerResult.Error = &struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		}{
+			Code:    result.Error.Code,
+			Message: result.Error.Message,
+		}
+	}
+	return runnerResult, nil
 }
 
 func (a *stepAPIAdapter) SetContext(key string, value any) error {
@@ -162,20 +195,25 @@ func (a *stepAPIAdapter) IsCancelled() bool {
 	return false
 }
 
-func (a *stepAPIAdapter) WaitForApproval(ctx context.Context, req ApprovalRequest) (ApprovalOutcome, error) {
+func (a *stepAPIAdapter) Logger() *zap.Logger {
+	return a.logger
+}
+
+func (a *stepAPIAdapter) WaitForApproval(ctx context.Context, req stepapi.ApprovalRequest) (stepapi.ApprovalOutcome, error) {
 	if a.currentStep == "" {
-		return ApprovalOutcome{}, fmt.Errorf("BeginStep must be called before WaitForApproval")
+		return stepapi.ApprovalOutcome{}, fmt.Errorf("BeginStep must be called before WaitForApproval")
 	}
 
+	// First, acquire a connection to insert the approval request
 	conn, err := a.pool.Acquire(ctx)
 	if err != nil {
-		return ApprovalOutcome{}, fmt.Errorf("failed to acquire db connection: %w", err)
+		return stepapi.ApprovalOutcome{}, fmt.Errorf("failed to acquire db connection: %w", err)
 	}
-	defer conn.Release()
 
 	reqBytes, err := json.Marshal(req)
 	if err != nil {
-		return ApprovalOutcome{}, fmt.Errorf("failed to marshal approval request: %w", err)
+		conn.Release()
+		return stepapi.ApprovalOutcome{}, fmt.Errorf("failed to marshal approval request: %w", err)
 	}
 
 	approvalTTL := "48 hours"
@@ -200,8 +238,10 @@ func (a *stepAPIAdapter) WaitForApproval(ctx context.Context, req ApprovalReques
 		reqBytes,
 		approvalTTL,
 	)
+	conn.Release() // Release connection immediately after insert
+
 	if err != nil {
-		return ApprovalOutcome{}, fmt.Errorf("failed to park step for approval: %w", err)
+		return stepapi.ApprovalOutcome{}, fmt.Errorf("failed to park step for approval: %w", err)
 	}
 
 	ticker := time.NewTicker(a.pollInterval)
@@ -210,10 +250,17 @@ func (a *stepAPIAdapter) WaitForApproval(ctx context.Context, req ApprovalReques
 	for {
 		select {
 		case <-ctx.Done():
-			return ApprovalOutcome{}, ctx.Err()
+			return stepapi.ApprovalOutcome{}, ctx.Err()
 		case <-ticker.C:
-			var outcome ApprovalOutcome
-			err := conn.QueryRow(
+			// Acquire a new connection for each poll attempt
+			pollConn, err := a.pool.Acquire(ctx)
+			if err != nil {
+				// If we can't acquire a connection, continue polling
+				continue
+			}
+
+			var outcome stepapi.ApprovalOutcome
+			err = pollConn.QueryRow(
 				ctx,
 				`SELECT decision, approver, COALESCE(justification,''), created_at
 				 FROM approval_decisions
@@ -233,11 +280,14 @@ func (a *stepAPIAdapter) WaitForApproval(ctx context.Context, req ApprovalReques
 				a.attempt,
 				a.currentStep,
 			).Scan(&outcome.Decision, &outcome.Approver, &outcome.Justification, &outcome.DecidedAt)
+
+			pollConn.Release() // Release connection immediately after query
+
 			if err != nil {
 				if errors.Is(err, pgx.ErrNoRows) {
 					continue
 				}
-				return ApprovalOutcome{}, fmt.Errorf("failed reading approval decision: %w", err)
+				return stepapi.ApprovalOutcome{}, fmt.Errorf("failed reading approval decision: %w", err)
 			}
 			return outcome, nil
 		}

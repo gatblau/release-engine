@@ -1,0 +1,25 @@
+apiVersion: infrastructure.platform.io/v1alpha1
+kind: XFileStorage
+metadata:
+  name: shared-app-files
+  namespace: workloads
+spec:
+  compositionRef:
+    name: xfilestorage-aws-efs
+  parameters:
+    providerConfigRef:
+      name: aws-provider
+      kind: ClusterProviderConfig
+    region: eu-west-1
+    encrypted: true
+    performanceMode: generalPurpose
+    throughputMode: bursting
+    creationToken: shared-app-files
+    nameTag: shared-app-files
+    lifecyclePolicy:
+      - transitionToIa: AFTER_30_DAYS
+        transitionToPrimaryStorageClass: AFTER_1_ACCESS
+    tags:
+      owner: platform
+      environment: dev
+      workload: app

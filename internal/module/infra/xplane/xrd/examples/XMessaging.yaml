@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: messaging-demo
+---
+apiVersion: infrastructure.platform.io/v1alpha1
+kind: XMessaging
+metadata:
+  namespace: messaging-demo
+  name: orders
+spec:
+  parameters:
+    providerConfigRef: aws-provider
+    region: eu-west-1
+    queueCount: 2
+    topicCount: 1
+    fifo: true
+    encryption: true
+    dlqEnabled: true
+    dlqMaxRetry: 5

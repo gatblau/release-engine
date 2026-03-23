@@ -1,0 +1,20 @@
+apiVersion: infrastructure.platform.io/v1alpha1
+kind: XCache
+metadata:
+  name: app-cache
+  namespace: platform-dev
+spec:
+  compositionRef:
+    name: cache-aws
+  parameters:
+    region: eu-west-1
+    providerConfigRef: aws-provider
+    engine: redis
+    nodeType: cache.r7g.large
+    engineVersion: "7.1"
+    replicaCount: 2
+    snapshotRetentionDays: 7
+    subnetGroupName: app-cache-subnets
+    securityGroupIds:
+      - sg-0123456789abcdef0
+      - sg-abcdef0123456789a

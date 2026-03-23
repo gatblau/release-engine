@@ -1,0 +1,68 @@
+apiVersion: apiextensions.crossplane.io/v2
+kind: CompositeResourceDefinition
+metadata:
+  name: xmessagings.infrastructure.platform.io
+spec:
+  scope: Namespaced
+  defaultCompositionRef:
+    name: messaging-aws
+  group: infrastructure.platform.io
+  names:
+    kind: XMessaging
+    plural: xmessagings
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required:
+                - parameters
+              properties:
+                parameters:
+                  type: object
+                  required:
+                    - region
+                  properties:
+                    providerConfigRef:
+                      type: string
+                      default: aws-provider
+                    region:
+                      type: string
+                    queueCount:
+                      type: integer
+                      default: 1
+                    topicCount:
+                      type: integer
+                      default: 0
+                    fifo:
+                      type: boolean
+                      default: false
+                    encryption:
+                      type: boolean
+                      default: true
+                    dlqEnabled:
+                      type: boolean
+                      default: true
+                    dlqMaxRetry:
+                      type: integer
+                      default: 3
+            status:
+              type: object
+              properties:
+                queueUrls:
+                  type: array
+                  items:
+                    type: string
+                queueArns:
+                  type: array
+                  items:
+                    type: string
+                topicArns:
+                  type: array
+                  items:
+                    type: string

@@ -1,0 +1,171 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: xidentity-aws-role
+  labels:
+    provider: aws
+    service: iam
+spec:
+  compositeTypeRef:
+    apiVersion: infrastructure.platform.io/v1alpha1
+    kind: XIdentity
+
+  mode: Pipeline
+  pipeline:
+    - step: render
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            {{- $xr := .observed.composite.resource }}
+            {{- $spec := $xr.spec.parameters }}
+            {{- $name := $xr.metadata.name }}
+            {{- $providerConfigName := default "aws-provider" $spec.providerConfigRef }}
+            {{- $type := $spec.type }}
+            {{- $tags := default dict $spec.tags }}
+
+            {{/* ============================================================
+                 BUILD ASSUME ROLE POLICY BASED ON TYPE
+                 ============================================================ */}}
+            {{- $assumeRolePolicy := "" }}
+
+            {{- if eq $type "service" }}
+            {{- $assumeRolePolicy = printf `{
+              "Version": "2012-10-17",
+              "Statement": [{
+                "Effect": "Allow",
+                "Principal": {"Service": "%s"},
+                "Action": "sts:AssumeRole"
+              }]
+            }` $spec.servicePrincipal }}
+
+            {{- else if eq $type "irsa" }}
+            {{- $oidcUrl := $spec.oidc.issuerUrl }}
+            {{- $oidcHost := trimPrefix "https://" $oidcUrl }}
+            {{- $ns := $spec.oidc.namespace }}
+            {{- $sa := $spec.oidc.serviceAccount }}
+            {{- $condition := printf "%s:sub" $oidcHost }}
+            {{- $conditionValue := printf "system:serviceaccount:%s:%s" $ns $sa }}
+            {{- $assumeRolePolicy = printf `{
+              "Version": "2012-10-17",
+              "Statement": [{
+                "Effect": "Allow",
+                "Principal": {"Federated": "arn:aws:iam::%s:oidc-provider/%s"},
+                "Action": "sts:AssumeRoleWithWebIdentity",
+                "Condition": {
+                  "StringEquals": {
+                    "%s": "%s"
+                  }
+                }
+              }]
+            }` "ACCOUNT_ID" $oidcHost $condition $conditionValue }}
+
+            {{- else if eq $type "federation" }}
+            {{- $assumeRolePolicy = printf `{
+              "Version": "2012-10-17",
+              "Statement": [{
+                "Effect": "Allow",
+                "Principal": {"Federated": "%s"},
+                "Action": "sts:AssumeRoleWithSAML",
+                "Condition": {
+                  "StringEquals": {
+                    "SAML:aud": "https://signin.aws.amazon.com/saml"
+                  }
+                }
+              }]
+            }` $spec.federationProvider }}
+            {{- end }}
+
+            {{/* ============================================================
+                 IAM ROLE
+                 ============================================================ */}}
+            ---
+            apiVersion: iam.aws.upbound.io/v1beta1
+            kind: Role
+            metadata:
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: identity-role
+              labels:
+                role: identity
+            spec:
+              deletionPolicy: Delete
+              providerConfigRef:
+                name: {{ $providerConfigName }}
+              forProvider:
+                assumeRolePolicy: |
+            {{ $assumeRolePolicy | indent 18 }}
+                maxSessionDuration: 3600
+                tags:
+                {{- range $k, $v := $tags }}
+                  {{ $k }}: {{ $v | quote }}
+                {{- end }}
+                  managed-by: crossplane
+                  identity-type: {{ $type }}
+
+            {{/* ============================================================
+                 MANAGED POLICY ATTACHMENTS
+                 ============================================================ */}}
+            {{- range $i, $policyArn := (default list $spec.managedPolicies) }}
+            ---
+            apiVersion: iam.aws.upbound.io/v1beta1
+            kind: RolePolicyAttachment
+            metadata:
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: {{ printf "managed-policy-%d" $i }}
+            spec:
+              deletionPolicy: Delete
+              providerConfigRef:
+                name: {{ $providerConfigName }}
+              forProvider:
+                policyArn: {{ $policyArn }}
+                roleSelector:
+                  matchControllerRef: true
+                  matchLabels:
+                    role: identity
+            {{- end }}
+
+            {{/* ============================================================
+                 INLINE POLICY (optional)
+                 ============================================================ */}}
+            {{- if $spec.inlinePolicy }}
+            ---
+            apiVersion: iam.aws.upbound.io/v1beta1
+            kind: RolePolicy
+            metadata:
+              annotations:
+                gotemplating.fn.crossplane.io/composition-resource-name: inline-policy
+            spec:
+              deletionPolicy: Delete
+              providerConfigRef:
+                name: {{ $providerConfigName }}
+              forProvider:
+                roleSelector:
+                  matchControllerRef: true
+                  matchLabels:
+                    role: identity
+                policy: |
+            {{ $spec.inlinePolicy | indent 18 }}
+            {{- end }}
+
+            {{/* ============================================================
+                 STATUS
+                 ============================================================ */}}
+            ---
+            apiVersion: infrastructure.platform.io/v1alpha1
+            kind: XIdentity
+            metadata:
+              name: {{ $name }}
+            status:
+              {{- $role := index .observed.resources "identity-role" }}
+              {{- if and $role $role.resource $role.resource.status $role.resource.status.atProvider }}
+              roleArn: {{ $role.resource.status.atProvider.arn }}
+              roleName: {{ $role.resource.status.atProvider.id }}
+              {{- end }}
+
+    - step: ready
+      functionRef:
+        name: function-auto-ready
