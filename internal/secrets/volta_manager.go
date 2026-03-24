@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"reflect"
 	"sync"
 
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -55,6 +56,12 @@ type VaultService interface {
 	// UseSecrets retrieves and decrypts multiple secrets, passing the decrypted data to the callback fn.
 	// The callback is called synchronously, and the decrypted data is cleared after the callback returns.
 	UseSecrets(secretKeys []string, fn func(secrets map[string][]byte) error) error
+	// StoreSecret encrypts and stores secret data.
+	StoreSecret(secretID string, secretData []byte) error
+	// DeleteSecret removes a secret and its metadata from the vault.
+	DeleteSecret(secretID string) error
+	// ListSecrets returns secret metadata (keys only).
+	ListSecrets() ([]string, error)
 	// Close releases resources associated with the vault
 	Close() error
 }
@@ -69,6 +76,54 @@ func (s *voltaVaultService) UseSecret(secretKey string, fn func(data []byte) err
 
 func (s *voltaVaultService) UseSecrets(secretKeys []string, fn func(secrets map[string][]byte) error) error {
 	return s.v.UseSecrets(secretKeys, fn)
+}
+
+func (s *voltaVaultService) StoreSecret(secretID string, secretData []byte) error {
+	// Use empty tags and default content type
+	_, err := s.v.StoreSecret(secretID, secretData, nil, volta.ContentTypeText)
+	return err
+}
+
+func (s *voltaVaultService) DeleteSecret(secretID string) error {
+	return s.v.DeleteSecret(secretID)
+}
+
+func (s *voltaVaultService) ListSecrets() ([]string, error) {
+	// List secrets with nil options to get all
+	entries, err := s.v.ListSecrets(nil)
+	if err != nil {
+		return nil, err
+	}
+
+	keys := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		// Try to get the secret ID using reflection since we don't know the exact field name
+		// Common field names: SecretID, ID, Name
+		if entry == nil {
+			continue
+		}
+
+		// Use reflection to get the field value
+		val := reflect.ValueOf(entry).Elem()
+		if val.Kind() != reflect.Struct {
+			continue
+		}
+
+		// Try different field names
+		var secretID string
+		if field := val.FieldByName("SecretID"); field.IsValid() && field.Kind() == reflect.String {
+			secretID = field.String()
+		} else if field := val.FieldByName("ID"); field.IsValid() && field.Kind() == reflect.String {
+			secretID = field.String()
+		} else if field := val.FieldByName("Name"); field.IsValid() && field.Kind() == reflect.String {
+			secretID = field.String()
+		}
+
+		if secretID != "" {
+			keys = append(keys, secretID)
+		}
+	}
+	return keys, nil
 }
 
 func (s *voltaVaultService) Close() error {

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/gatblau/release-engine/internal/secrets"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"go.uber.org/zap"
@@ -21,9 +22,10 @@ type Server interface {
 }
 
 type server struct {
-	e      *echo.Echo
-	logger *zap.Logger
-	port   int
+	e              *echo.Echo
+	logger         *zap.Logger
+	port           int
+	secretsHandler *SecretsHandler
 }
 
 // NewServer creates a new HTTP server.
@@ -45,6 +47,29 @@ func NewServer(port int, logger *zap.Logger) Server {
 		e:      e,
 		logger: logger,
 		port:   port,
+	}
+}
+
+// NewServerWithSecrets creates a new HTTP server with secrets management support.
+func NewServerWithSecrets(port int, logger *zap.Logger, voltaManager *secrets.Manager) Server {
+	e := echo.New()
+	e.HideBanner = true
+	e.Use(middleware.Recover())
+	e.Use(middleware.RequestID())
+	e.Use(middleware.RequestLoggerWithConfig(middleware.RequestLoggerConfig{
+		LogStatus: true,
+		LogMethod: true,
+		LogURI:    true,
+		LogValuesFunc: func(c echo.Context, v middleware.RequestLoggerValues) error {
+			return nil
+		},
+	}))
+
+	return &server{
+		e:              e,
+		logger:         logger,
+		port:           port,
+		secretsHandler: NewSecretsHandler(voltaManager, logger),
 	}
 }
 
@@ -80,6 +105,11 @@ func (s *server) RegisterRoutes() {
 	api.GET("/internal/dora/dead-letter", doraHandler.ListDeadLetter)
 	api.GET("/internal/dora/dead-letter/:id", doraHandler.GetDeadLetter)
 	api.POST("/internal/dora/dead-letter/:id/replay", doraHandler.ReplayDeadLetter)
+
+	// secrets API
+	api.PUT("/tenants/:tenant/secrets/:key", s.secretsHandler.SetSecret)
+	api.GET("/tenants/:tenant/secrets", s.secretsHandler.ListSecrets)
+	api.DELETE("/tenants/:tenant/secrets/:key", s.secretsHandler.DeleteSecret)
 
 	// Inbound provider webhooks use provider-native authentication and are not
 	// JWT-protected interactive API routes.
