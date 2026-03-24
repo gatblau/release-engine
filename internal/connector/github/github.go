@@ -22,7 +22,7 @@ type GitHubConnector struct {
 	closed bool
 }
 
-func NewGitHubConnector(cfg connector.ConnectorConfig, token string) (*GitHubConnector, error) {
+func NewGitHubConnector(cfg connector.ConnectorConfig) (*GitHubConnector, error) {
 	base, err := connector.NewBaseConnector(connector.ConnectorTypeGit, "github")
 	if err != nil {
 		return nil, err
@@ -30,9 +30,6 @@ func NewGitHubConnector(cfg connector.ConnectorConfig, token string) (*GitHubCon
 	// Use explicit HTTP client to allow gock interception in tests if needed
 	httpClient := &http.Client{}
 	client := github.NewClient(httpClient)
-	if token != "" {
-		client = client.WithAuthToken(token)
-	}
 	return &GitHubConnector{
 		BaseConnector: base,
 		client:        client,

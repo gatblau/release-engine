@@ -52,6 +52,9 @@ type VaultService interface {
 	// UseSecret retrieves and decrypts a secret, passing the decrypted data to the callback fn.
 	// The callback is called synchronously, and the decrypted data is cleared after the callback returns.
 	UseSecret(secretKey string, fn func(data []byte) error) error
+	// UseSecrets retrieves and decrypts multiple secrets, passing the decrypted data to the callback fn.
+	// The callback is called synchronously, and the decrypted data is cleared after the callback returns.
+	UseSecrets(secretKeys []string, fn func(secrets map[string][]byte) error) error
 	// Close releases resources associated with the vault
 	Close() error
 }
@@ -62,6 +65,10 @@ type voltaVaultService struct {
 
 func (s *voltaVaultService) UseSecret(secretKey string, fn func(data []byte) error) error {
 	return s.v.UseSecret(secretKey, fn)
+}
+
+func (s *voltaVaultService) UseSecrets(secretKeys []string, fn func(secrets map[string][]byte) error) error {
+	return s.v.UseSecrets(secretKeys, fn)
 }
 
 func (s *voltaVaultService) Close() error {

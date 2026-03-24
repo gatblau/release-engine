@@ -13,6 +13,7 @@ import (
 	"github.com/gatblau/release-engine/internal/connector"
 	"github.com/gatblau/release-engine/internal/db"
 	"github.com/gatblau/release-engine/internal/logger"
+	"github.com/gatblau/release-engine/internal/secrets"
 	"github.com/gatblau/release-engine/internal/stepapi"
 	"github.com/jackc/pgx/v4"
 	"go.uber.org/zap"
@@ -25,6 +26,7 @@ type StepAPI = stepapi.StepAPI
 type stepAPIAdapter struct {
 	pool           db.Pool
 	familyRegistry connector.FamilyRegistry
+	vaultManager   *secrets.Manager
 	jobID          string
 	runID          string
 	attempt        int
@@ -51,6 +53,31 @@ func NewStepAPIAdapter(pool db.Pool, familyRegistry connector.FamilyRegistry, jo
 	return &stepAPIAdapter{
 		pool:           pool,
 		familyRegistry: familyRegistry,
+		jobID:          jobID,
+		runID:          runID,
+		attempt:        attempt,
+		contextStore:   make(map[string]any),
+		pollInterval:   500 * time.Millisecond,
+		logger:         log,
+	}
+}
+
+// NewStepAPIAdapterWithVault creates the module-facing runtime API for a specific job run with Volta integration.
+func NewStepAPIAdapterWithVault(pool db.Pool, familyRegistry connector.FamilyRegistry, vaultManager *secrets.Manager, jobID, runID string, attempt int) StepAPI {
+	// Create a logger for the module execution
+	loggerFactory, err := logger.NewFactory("info", "console")
+	var log *zap.Logger
+	if err != nil {
+		// Fallback to no-op logger if factory creation fails
+		log = zap.NewNop()
+	} else {
+		log = loggerFactory.New(fmt.Sprintf("module.job.%s", jobID))
+	}
+
+	return &stepAPIAdapter{
+		pool:           pool,
+		familyRegistry: familyRegistry,
+		vaultManager:   vaultManager,
 		jobID:          jobID,
 		runID:          runID,
 		attempt:        attempt,
@@ -197,18 +224,120 @@ func (a *stepAPIAdapter) CallConnector(ctx context.Context, req stepapi.Connecto
 		return runnerResult, nil
 	}
 
-	// For Phase 1: We have required secrets but no Volta integration yet
-	// Return an error indicating secret support is not yet implemented
-	return &stepapi.ConnectorResult{
-		Status: "error",
-		Error: &struct {
+	// Phase 2: Volta integration - fetch secrets via Volta and execute connector
+	// Check if module provides tenant context
+	var secretCtx connector.SecretContext
+	if a.module != nil {
+		if provider, ok := a.module.(connector.SecretContextProvider); ok {
+			secretCtx = provider.SecretContext()
+		} else {
+			// Module doesn't implement SecretContextProvider but connector requires secrets
+			return &stepapi.ConnectorResult{
+				Status: "error",
+				Error: &struct {
+					Code    string `json:"code"`
+					Message string `json:"message"`
+				}{
+					Code:    "TENANT_CONTEXT_MISSING",
+					Message: "connector requires secrets but module doesn't provide tenant context",
+				},
+			}, nil
+		}
+	} else {
+		// No module reference available (should not happen in normal execution)
+		return &stepapi.ConnectorResult{
+			Status: "error",
+			Error: &struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			}{
+				Code:    "MODULE_MISSING",
+				Message: "module reference not available for secret resolution",
+			},
+		}, nil
+	}
+
+	// Check if vault manager is available
+	if a.vaultManager == nil {
+		return &stepapi.ConnectorResult{
+			Status: "error",
+			Error: &struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			}{
+				Code:    "VOLTA_NOT_CONFIGURED",
+				Message: "Volta secret manager not configured",
+			},
+		}, nil
+	}
+
+	// Build physical keys, maintain logical mapping
+	physicalToLogical := make(map[string]string, len(requiredSecrets))
+	physicalKeys := make([]string, len(requiredSecrets))
+	for i, logicalKey := range requiredSecrets {
+		physical := fmt.Sprintf("tenants/%s/%s", secretCtx.TenantID, logicalKey)
+		physicalKeys[i] = physical
+		physicalToLogical[physical] = logicalKey
+	}
+
+	// Get vault for the tenant
+	vault, err := a.vaultManager.GetVault(ctx, secretCtx.TenantID)
+	if err != nil {
+		return &stepapi.ConnectorResult{
+			Status: "error",
+			Error: &struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			}{
+				Code:    "VAULT_UNAVAILABLE",
+				Message: fmt.Sprintf("failed to get vault for tenant %s: %v", secretCtx.TenantID, err),
+			},
+		}, nil
+	}
+
+	// Execute within Volta's secure scope
+	var result *connector.ConnectorResult
+	err = vault.UseSecrets(physicalKeys, func(secrets map[string][]byte) error {
+		// Remap to logical keys for connector
+		logicalSecrets := make(map[string][]byte, len(secrets))
+		for physical, value := range secrets {
+			logicalKey := physicalToLogical[physical]
+			logicalSecrets[logicalKey] = value
+		}
+
+		var execErr error
+		result, execErr = conn.Execute(ctx, req.Operation, req.Input, logicalSecrets)
+		return execErr
+	})
+
+	if err != nil {
+		return &stepapi.ConnectorResult{
+			Status: "error",
+			Error: &struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			}{
+				Code:    "SECRET_EXECUTION_FAILED",
+				Message: fmt.Sprintf("failed to execute with secrets: %v", err),
+			},
+		}, nil
+	}
+
+	// Convert connector.ConnectorResult to stepapi.ConnectorResult
+	runnerResult := &stepapi.ConnectorResult{
+		Status: result.Status,
+		Output: result.Output,
+	}
+	if result.Error != nil {
+		runnerResult.Error = &struct {
 			Code    string `json:"code"`
 			Message string `json:"message"`
 		}{
-			Code:    "SECRETS_NOT_SUPPORTED",
-			Message: fmt.Sprintf("connector requires secrets but secret support is not yet implemented: %v", requiredSecrets),
-		},
-	}, nil
+			Code:    result.Error.Code,
+			Message: result.Error.Message,
+		}
+	}
+	return runnerResult, nil
 }
 
 func (a *stepAPIAdapter) SetContext(key string, value any) error {

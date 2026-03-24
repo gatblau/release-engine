@@ -22,7 +22,7 @@ func (suite *GitHubContractTestSuite) SetupTest() {
 	httpClient := &http.Client{}
 	gock.InterceptClient(httpClient)
 
-	conn, err := NewGitHubConnectorWithClient(cfg, "fake-token", httpClient)
+	conn, err := NewGitHubConnectorWithClient(cfg, "", httpClient)
 	suite.Require().NoError(err)
 
 	gock.New("https://api.github.com").
