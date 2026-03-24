@@ -42,6 +42,6 @@ func (suite *CrossplaneContractTestSuite) TestErrorMapping() {
 		"kind":       "UnknownResource",
 		"name":       "not-found",
 		"apiVersion": "test.crossplane.io/v1alpha1",
-	})
+	}, nil)
 	suite.Error(err) // Should probably return a terminal error for not found instead of go error
 }

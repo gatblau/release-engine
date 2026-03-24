@@ -69,7 +69,12 @@ func (c *AWSConnector) Validate(operation string, input map[string]interface{}) 
 	return nil
 }
 
-func (c *AWSConnector) Execute(ctx context.Context, operation string, input map[string]interface{}) (*connector.ConnectorResult, error) {
+func (c *AWSConnector) RequiredSecrets(operation string) []string {
+	// AWS connector currently doesn't require any secrets - uses configured AWS credentials
+	return []string{}
+}
+
+func (c *AWSConnector) Execute(ctx context.Context, operation string, input map[string]interface{}, secrets map[string][]byte) (*connector.ConnectorResult, error) {
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()

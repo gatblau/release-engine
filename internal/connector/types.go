@@ -96,13 +96,36 @@ func CallIDFromContext(ctx context.Context) string {
 	return ""
 }
 
+// --- Secret Interfaces ---
+
+// SecretContextProvider is an optional interface that modules can implement
+// to provide tenant context for secret resolution.
+type SecretContextProvider interface {
+	// SecretContext returns the tenant context for secret resolution.
+	// The runtime uses this to determine which tenant's secrets to fetch.
+	SecretContext() SecretContext
+}
+
+// SecretContext holds the tenant context for secret resolution.
+type SecretContext struct {
+	TenantID string
+}
+
+// SecretRequirer is an optional interface that connectors can implement
+// to declare what secrets they need for a given operation.
+type SecretRequirer interface {
+	// RequiredSecrets returns a list of logical secret keys required for the operation.
+	// The runtime will fetch these secrets and pass them to Execute().
+	RequiredSecrets(operation string) []string
+}
+
 // --- Connector Interface ---
 
 // Connector is the core interface that all connector implementations must satisfy.
 type Connector interface {
 	Key() string
 	Validate(operation string, input map[string]interface{}) error
-	Execute(ctx context.Context, operation string, input map[string]interface{}) (*ConnectorResult, error)
+	Execute(ctx context.Context, operation string, input map[string]interface{}, secrets map[string][]byte) (*ConnectorResult, error)
 	Close() error
 }
 

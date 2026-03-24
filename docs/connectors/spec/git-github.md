@@ -20,7 +20,7 @@ type GitHubConnector struct {
 
 func NewGitHubConnector(cfg connector.ConnectorConfig, token string) (*GitHubConnector, error)
 func (c *GitHubConnector) Validate(operation string, input map[string]interface{}) error
-func (c *GitHubConnector) Execute(ctx context.Context, operation string, input map[string]interface{}) (*connector.ConnectorResult, error)
+func (c *GitHubConnector) Execute(ctx context.Context, operation string, input map[string]interface{}, secrets map[string][]byte) (*connector.ConnectorResult, error)
 func (c *GitHubConnector) Close() error
 
 // Implements connector.OperationDescriber

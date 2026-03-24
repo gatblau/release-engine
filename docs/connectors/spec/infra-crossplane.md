@@ -20,7 +20,7 @@ config connector.ConnectorConfig
 
 func NewCrossplaneConnector(cfg connector.ConnectorConfig, client dynamic.Interface) (*CrossplaneConnector, error)
 func (c *CrossplaneConnector) Validate(operation string, input map[string]interface{}) error
-func (c *CrossplaneConnector) Execute(ctx context.Context, operation string, input map[string]interface{}) (*connector.ConnectorResult, error)
+func (c *CrossplaneConnector) Execute(ctx context.Context, operation string, input map[string]interface{}, secrets map[string][]byte) (*connector.ConnectorResult, error)
 func (c *CrossplaneConnector) Close() error
 
 // Implements connector.OperationDescriber

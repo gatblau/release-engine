@@ -27,7 +27,7 @@ func (suite *FileGitContractTestSuite) SetupTest() {
 	// Create the repository first (git‑like semantics: push requires an existing repo)
 	_, err = conn.Execute(context.Background(), "create_repository", map[string]interface{}{
 		"repo_path": "tenant/test-app",
-	})
+	}, nil)
 	suite.Require().NoError(err)
 
 	// Now push_files can be tested as a valid operation
@@ -50,7 +50,7 @@ func TestFileGitConnectorOperations(t *testing.T) {
 	conn, err := NewFileGitConnector(tempDir)
 	require.NoError(t, err)
 	require.NoError(t, conn.Validate("create_repository", map[string]interface{}{"repo_path": "tenant/ops"}))
-	res, err := conn.Execute(context.Background(), "create_repository", map[string]interface{}{"repo_path": "tenant/ops"})
+	res, err := conn.Execute(context.Background(), "create_repository", map[string]interface{}{"repo_path": "tenant/ops"}, nil)
 	require.NoError(t, err)
 	require.Equal(t, connector.StatusSuccess, res.Status)
 	info, err := os.Stat(filepath.Join(tempDir, "tenant", "ops"))
@@ -63,11 +63,11 @@ func TestFileGitConnectorOperations(t *testing.T) {
 			map[string]interface{}{"path": "infra/vars.yaml", "content": "vars:"},
 		},
 	}
-	res, err = conn.Execute(context.Background(), "push_files", filesPayload)
+	res, err = conn.Execute(context.Background(), "push_files", filesPayload, nil)
 	require.NoError(t, err)
 	require.Equal(t, connector.StatusSuccess, res.Status)
 	require.Equal(t, 2, res.Output["files_written"])
-	getRes, err := conn.Execute(context.Background(), "get_file", map[string]interface{}{"repo_path": "tenant/ops", "path": "infra/main.yaml"})
+	getRes, err := conn.Execute(context.Background(), "get_file", map[string]interface{}{"repo_path": "tenant/ops", "path": "infra/main.yaml"}, nil)
 	require.NoError(t, err)
 	require.Equal(t, connector.StatusSuccess, getRes.Status)
 	require.Equal(t, "apiVersion: v1", getRes.Output["content"])
@@ -76,10 +76,10 @@ func TestFileGitConnectorOperations(t *testing.T) {
 		"path":      "infra/main.yaml",
 		"content":   "apiVersion: v2",
 	}
-	res, err = conn.Execute(context.Background(), "create_or_update_file", updatePayload)
+	res, err = conn.Execute(context.Background(), "create_or_update_file", updatePayload, nil)
 	require.NoError(t, err)
 	require.Equal(t, connector.StatusSuccess, res.Status)
-	getRes, err = conn.Execute(context.Background(), "get_file", map[string]interface{}{"repo_path": "tenant/ops", "path": "infra/main.yaml"})
+	getRes, err = conn.Execute(context.Background(), "get_file", map[string]interface{}{"repo_path": "tenant/ops", "path": "infra/main.yaml"}, nil)
 	require.NoError(t, err)
 	require.Equal(t, "apiVersion: v2", getRes.Output["content"])
 }

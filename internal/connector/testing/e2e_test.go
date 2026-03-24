@@ -19,7 +19,7 @@ func TestE2EComponentHarness(t *testing.T) {
 	mock, _ := connector.NewBaseConnector(connector.ConnectorTypeOther, "mock")
 	m := &MockConnector{
 		BaseConnector: mock,
-		ExecuteFunc: func(ctx context.Context, operation string, input map[string]interface{}) (*connector.ConnectorResult, error) {
+		ExecuteFunc: func(ctx context.Context, operation string, input map[string]interface{}, secrets map[string][]byte) (*connector.ConnectorResult, error) {
 			return &connector.ConnectorResult{Status: connector.StatusSuccess, Output: map[string]interface{}{"result": "done"}}, nil
 		},
 	}

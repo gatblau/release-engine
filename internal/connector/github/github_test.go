@@ -67,7 +67,7 @@ func TestGitHubConnector_CreateRepository(t *testing.T) {
 		"name":  "test",
 	}
 
-	result, err := conn.Execute(context.Background(), "create_repository", input)
+	result, err := conn.Execute(context.Background(), "create_repository", input, nil)
 	assert.NoError(t, err)
 	assert.Equal(t, connector.StatusSuccess, result.Status)
 	assert.Equal(t, int64(123), result.Output["id"])

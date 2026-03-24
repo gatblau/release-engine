@@ -61,7 +61,7 @@ connectors:
 			require.NoError(t, err)
 			return base
 		}(),
-		ExecuteFunc: func(ctx context.Context, operation string, input map[string]interface{}) (*connector.ConnectorResult, error) {
+		ExecuteFunc: func(ctx context.Context, operation string, input map[string]interface{}, secrets map[string][]byte) (*connector.ConnectorResult, error) {
 			return &connector.ConnectorResult{
 				Status: connector.StatusSuccess,
 				Output: map[string]interface{}{
@@ -78,7 +78,7 @@ connectors:
 			require.NoError(t, err)
 			return base
 		}(),
-		ExecuteFunc: func(ctx context.Context, operation string, input map[string]interface{}) (*connector.ConnectorResult, error) {
+		ExecuteFunc: func(ctx context.Context, operation string, input map[string]interface{}, secrets map[string][]byte) (*connector.ConnectorResult, error) {
 			return &connector.ConnectorResult{
 				Status: connector.StatusSuccess,
 				Output: map[string]interface{}{

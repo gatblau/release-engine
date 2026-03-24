@@ -20,7 +20,7 @@ type AWSConnector struct {
 
 func NewAWSConnector(cfg connector.ConnectorConfig, awsCfg aws.Config) (*AWSConnector, error)
 func (c *AWSConnector) Validate(operation string, input map[string]interface{}) error
-func (c *AWSConnector) Execute(ctx context.Context, operation string, input map[string]interface{}) (*connector.ConnectorResult, error)
+func (c *AWSConnector) Execute(ctx context.Context, operation string, input map[string]interface{}, secrets map[string][]byte) (*connector.ConnectorResult, error)
 func (c *AWSConnector) Close() error
 
 // Implements connector.OperationDescriber

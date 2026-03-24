@@ -19,7 +19,7 @@ type MockWebhookConnector struct {
 	closed         bool
 	successAll     bool // if true, all callbacks succeed
 	failAll        bool // if true, all callbacks fail
-	customCallback func(ctx context.Context, input map[string]interface{}) (*connector.ConnectorResult, error)
+	customCallback func(ctx context.Context, input map[string]interface{}, secrets map[string][]byte) (*connector.ConnectorResult, error)
 	callHistory    []map[string]interface{} // track calls for verification
 }
 
@@ -56,7 +56,7 @@ func (m *MockWebhookConnector) WithFailAll() *MockWebhookConnector {
 }
 
 // WithCustomCallback configures a custom callback function.
-func (m *MockWebhookConnector) WithCustomCallback(fn func(ctx context.Context, input map[string]interface{}) (*connector.ConnectorResult, error)) *MockWebhookConnector {
+func (m *MockWebhookConnector) WithCustomCallback(fn func(ctx context.Context, input map[string]interface{}, secrets map[string][]byte) (*connector.ConnectorResult, error)) *MockWebhookConnector {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.customCallback = fn
@@ -120,7 +120,7 @@ func (m *MockWebhookConnector) Validate(operation string, input map[string]inter
 }
 
 // Execute performs webhook callback.
-func (m *MockWebhookConnector) Execute(ctx context.Context, operation string, input map[string]interface{}) (*connector.ConnectorResult, error) {
+func (m *MockWebhookConnector) Execute(ctx context.Context, operation string, input map[string]interface{}, secrets map[string][]byte) (*connector.ConnectorResult, error) {
 	m.mu.RLock()
 	if m.closed {
 		m.mu.RUnlock()
@@ -138,7 +138,7 @@ func (m *MockWebhookConnector) Execute(ctx context.Context, operation string, in
 	m.mu.Unlock()
 
 	if m.customCallback != nil {
-		return m.customCallback(ctx, input)
+		return m.customCallback(ctx, input, secrets)
 	}
 
 	if m.failAll {

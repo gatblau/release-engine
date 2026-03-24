@@ -83,7 +83,7 @@ func (c *FileGitConnector) Validate(operation string, input map[string]interface
 }
 
 // Execute handles the declared operations.
-func (c *FileGitConnector) Execute(ctx context.Context, operation string, input map[string]interface{}) (*connector.ConnectorResult, error) {
+func (c *FileGitConnector) Execute(ctx context.Context, operation string, input map[string]interface{}, secrets map[string][]byte) (*connector.ConnectorResult, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}

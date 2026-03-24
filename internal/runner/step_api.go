@@ -32,6 +32,8 @@ type stepAPIAdapter struct {
 	contextStore   map[string]any
 	pollInterval   time.Duration
 	logger         *zap.Logger
+	// module is the module that this StepAPI is serving
+	module any
 }
 
 // NewStepAPIAdapter creates the module-facing runtime API for a specific job run.
@@ -56,6 +58,13 @@ func NewStepAPIAdapter(pool db.Pool, familyRegistry connector.FamilyRegistry, jo
 		pollInterval:   500 * time.Millisecond,
 		logger:         log,
 	}
+}
+
+// NewStepAPIAdapterWithModule creates the module-facing runtime API for a specific job run with module reference.
+func NewStepAPIAdapterWithModule(pool db.Pool, familyRegistry connector.FamilyRegistry, jobID, runID string, attempt int, module any) StepAPI {
+	adapter := NewStepAPIAdapter(pool, familyRegistry, jobID, runID, attempt).(*stepAPIAdapter)
+	adapter.module = module
+	return adapter
 }
 
 func (a *stepAPIAdapter) BeginStep(stepKey string) error {
@@ -149,36 +158,57 @@ func (a *stepAPIAdapter) CallConnector(ctx context.Context, req stepapi.Connecto
 		}, nil
 	}
 
-	// Execute connector
-	result, err := conn.Execute(ctx, req.Operation, req.Input)
-	if err != nil {
-		return &stepapi.ConnectorResult{
-			Status: "error",
-			Error: &struct {
+	// Determine required secrets
+	var requiredSecrets []string
+	if secretReq, ok := conn.(connector.SecretRequirer); ok {
+		requiredSecrets = secretReq.RequiredSecrets(req.Operation)
+	}
+
+	// No secrets needed — execute directly with empty secrets map
+	if len(requiredSecrets) == 0 {
+		result, err := conn.Execute(ctx, req.Operation, req.Input, nil)
+		if err != nil {
+			return &stepapi.ConnectorResult{
+				Status: "error",
+				Error: &struct {
+					Code    string `json:"code"`
+					Message string `json:"message"`
+				}{
+					Code:    "EXECUTION_FAILED",
+					Message: fmt.Sprintf("execution failed: %v", err),
+				},
+			}, nil
+		}
+
+		// Convert connector.ConnectorResult to stepapi.ConnectorResult
+		runnerResult := &stepapi.ConnectorResult{
+			Status: result.Status,
+			Output: result.Output,
+		}
+		if result.Error != nil {
+			runnerResult.Error = &struct {
 				Code    string `json:"code"`
 				Message string `json:"message"`
 			}{
-				Code:    "EXECUTION_FAILED",
-				Message: fmt.Sprintf("execution failed: %v", err),
-			},
-		}, nil
+				Code:    result.Error.Code,
+				Message: result.Error.Message,
+			}
+		}
+		return runnerResult, nil
 	}
 
-	// Convert connector.ConnectorResult to stepapi.ConnectorResult
-	runnerResult := &stepapi.ConnectorResult{
-		Status: result.Status,
-		Output: result.Output,
-	}
-	if result.Error != nil {
-		runnerResult.Error = &struct {
+	// For Phase 1: We have required secrets but no Volta integration yet
+	// Return an error indicating secret support is not yet implemented
+	return &stepapi.ConnectorResult{
+		Status: "error",
+		Error: &struct {
 			Code    string `json:"code"`
 			Message string `json:"message"`
 		}{
-			Code:    result.Error.Code,
-			Message: result.Error.Message,
-		}
-	}
-	return runnerResult, nil
+			Code:    "SECRETS_NOT_SUPPORTED",
+			Message: fmt.Sprintf("connector requires secrets but secret support is not yet implemented: %v", requiredSecrets),
+		},
+	}, nil
 }
 
 func (a *stepAPIAdapter) SetContext(key string, value any) error {

@@ -77,8 +77,14 @@ func (c *WebhookConnector) Validate(operation string, input map[string]interface
 	return nil
 }
 
+// RequiredSecrets returns the secrets required for webhook operations.
+func (c *WebhookConnector) RequiredSecrets(operation string) []string {
+	// Webhook connector currently doesn't require any secrets
+	return []string{}
+}
+
 // Execute performs webhook callback.
-func (c *WebhookConnector) Execute(ctx context.Context, operation string, input map[string]interface{}) (*connector.ConnectorResult, error) {
+func (c *WebhookConnector) Execute(ctx context.Context, operation string, input map[string]interface{}, secrets map[string][]byte) (*connector.ConnectorResult, error) {
 	c.mu.RLock()
 	if c.closed {
 		c.mu.RUnlock()

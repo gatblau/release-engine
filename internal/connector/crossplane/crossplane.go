@@ -82,7 +82,12 @@ func (c *CrossplaneConnector) Validate(operation string, input map[string]interf
 	return nil
 }
 
-func (c *CrossplaneConnector) Execute(ctx context.Context, operation string, input map[string]interface{}) (*connector.ConnectorResult, error) {
+func (c *CrossplaneConnector) RequiredSecrets(operation string) []string {
+	// Crossplane connector currently doesn't require any secrets
+	return []string{}
+}
+
+func (c *CrossplaneConnector) Execute(ctx context.Context, operation string, input map[string]interface{}, secrets map[string][]byte) (*connector.ConnectorResult, error) {
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()

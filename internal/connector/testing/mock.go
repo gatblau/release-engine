@@ -11,7 +11,7 @@ import (
 type MockConnector struct {
 	connector.BaseConnector
 	ValidateFunc   func(operation string, input map[string]interface{}) error
-	ExecuteFunc    func(ctx context.Context, operation string, input map[string]interface{}) (*connector.ConnectorResult, error)
+	ExecuteFunc    func(ctx context.Context, operation string, input map[string]interface{}, secrets map[string][]byte) (*connector.ConnectorResult, error)
 	OperationsFunc func() []connector.OperationMeta
 	CloseFunc      func() error
 }
@@ -26,7 +26,7 @@ func (m *MockConnector) Validate(operation string, input map[string]interface{})
 	return nil
 }
 
-func (m *MockConnector) Execute(ctx context.Context, operation string, input map[string]interface{}) (*connector.ConnectorResult, error) {
+func (m *MockConnector) Execute(ctx context.Context, operation string, input map[string]interface{}, secrets map[string][]byte) (*connector.ConnectorResult, error) {
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
@@ -34,7 +34,7 @@ func (m *MockConnector) Execute(ctx context.Context, operation string, input map
 		return nil, errors.New("invalid operation name")
 	}
 	if m.ExecuteFunc != nil {
-		return m.ExecuteFunc(ctx, operation, input)
+		return m.ExecuteFunc(ctx, operation, input, secrets)
 	}
 	return &connector.ConnectorResult{Status: connector.StatusSuccess}, nil
 }

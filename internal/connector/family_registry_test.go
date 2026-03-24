@@ -15,7 +15,7 @@ type testConnector struct {
 }
 
 func (c *testConnector) Validate(operation string, input map[string]interface{}) error { return nil }
-func (c *testConnector) Execute(ctx context.Context, operation string, input map[string]interface{}) (*ConnectorResult, error) {
+func (c *testConnector) Execute(ctx context.Context, operation string, input map[string]interface{}, secrets map[string][]byte) (*ConnectorResult, error) {
 	return &ConnectorResult{Status: StatusSuccess}, nil
 }
 func (c *testConnector) Close() error { return nil }

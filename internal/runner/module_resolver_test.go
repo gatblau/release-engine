@@ -48,7 +48,7 @@ type mockConnector struct {
 
 func (m *mockConnector) Key() string                                                   { return m.key }
 func (m *mockConnector) Validate(operation string, input map[string]interface{}) error { return nil }
-func (m *mockConnector) Execute(ctx context.Context, operation string, input map[string]interface{}) (*connector.ConnectorResult, error) {
+func (m *mockConnector) Execute(ctx context.Context, operation string, input map[string]interface{}, secrets map[string][]byte) (*connector.ConnectorResult, error) {
 	return &connector.ConnectorResult{Status: connector.StatusSuccess}, nil
 }
 func (m *mockConnector) Close() error { return nil }

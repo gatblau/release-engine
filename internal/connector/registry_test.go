@@ -13,7 +13,7 @@ type mockConnector struct {
 }
 
 func (m *mockConnector) Validate(operation string, input map[string]interface{}) error { return nil }
-func (m *mockConnector) Execute(ctx context.Context, operation string, input map[string]interface{}) (*ConnectorResult, error) {
+func (m *mockConnector) Execute(ctx context.Context, operation string, input map[string]interface{}, secrets map[string][]byte) (*ConnectorResult, error) {
 	return &ConnectorResult{Status: StatusSuccess}, nil
 }
 func (m *mockConnector) Close() error { return nil }

@@ -198,7 +198,7 @@ type mockPolicyConnector struct{ connector.BaseConnector }
 type mockWebhookConnector struct{ connector.BaseConnector }
 
 func (m *mockGitConnector) Validate(operation string, input map[string]interface{}) error { return nil }
-func (m *mockGitConnector) Execute(ctx context.Context, operation string, input map[string]interface{}) (*connector.ConnectorResult, error) {
+func (m *mockGitConnector) Execute(ctx context.Context, operation string, input map[string]interface{}, secrets map[string][]byte) (*connector.ConnectorResult, error) {
 	return &connector.ConnectorResult{Status: connector.StatusSuccess}, nil
 }
 func (m *mockGitConnector) Close() error { return nil }
@@ -206,7 +206,7 @@ func (m *mockGitConnector) Close() error { return nil }
 func (m *mockPolicyConnector) Validate(operation string, input map[string]interface{}) error {
 	return nil
 }
-func (m *mockPolicyConnector) Execute(ctx context.Context, operation string, input map[string]interface{}) (*connector.ConnectorResult, error) {
+func (m *mockPolicyConnector) Execute(ctx context.Context, operation string, input map[string]interface{}, secrets map[string][]byte) (*connector.ConnectorResult, error) {
 	return &connector.ConnectorResult{Status: connector.StatusSuccess}, nil
 }
 func (m *mockPolicyConnector) Close() error { return nil }
@@ -214,7 +214,7 @@ func (m *mockPolicyConnector) Close() error { return nil }
 func (m *mockWebhookConnector) Validate(operation string, input map[string]interface{}) error {
 	return nil
 }
-func (m *mockWebhookConnector) Execute(ctx context.Context, operation string, input map[string]interface{}) (*connector.ConnectorResult, error) {
+func (m *mockWebhookConnector) Execute(ctx context.Context, operation string, input map[string]interface{}, secrets map[string][]byte) (*connector.ConnectorResult, error) {
 	return &connector.ConnectorResult{Status: connector.StatusSuccess}, nil
 }
 func (m *mockWebhookConnector) Close() error { return nil }

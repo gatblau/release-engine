@@ -37,7 +37,7 @@ func (suite *ConnectorContractTestSuite) TestValidation() {
 
 // 2. Execution Contract
 func (suite *ConnectorContractTestSuite) TestExecutionContract() {
-	res, err := suite.Connector.Execute(context.Background(), suite.ValidOperation, suite.ValidInput)
+	res, err := suite.Connector.Execute(context.Background(), suite.ValidOperation, suite.ValidInput, nil)
 	suite.NoError(err)
 	suite.NotNil(res)
 }
@@ -47,7 +47,7 @@ func (suite *ConnectorContractTestSuite) TestContextSensitivity() {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
 
-	_, err := suite.Connector.Execute(ctx, suite.ValidOperation, suite.ValidInput)
+	_, err := suite.Connector.Execute(ctx, suite.ValidOperation, suite.ValidInput, nil)
 	// Connector should handle context cancellation by either returning (nil, error) or (ConnectorResult{terminal}, nil)
 	// If context is cancelled, error is usually non-nil.
 	suite.Error(err, "should return error when context is cancelled")
@@ -71,7 +71,7 @@ func (suite *ConnectorContractTestSuite) TestIdempotencyAndClose() {
 // 6. Error Mapping test example
 func (suite *ConnectorContractTestSuite) TestErrorMapping() {
 	// Let's test that executing an invalid operation cleanly returns an error
-	_, err := suite.Connector.Execute(context.Background(), "invalid_operation_name", nil)
+	_, err := suite.Connector.Execute(context.Background(), "invalid_operation_name", nil, nil)
 	suite.Error(err)
 }
 
@@ -83,7 +83,7 @@ func (suite *ConnectorContractTestSuite) TestConcurrentExecution() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, _ = suite.Connector.Execute(ctx, suite.ValidOperation, suite.ValidInput)
+			_, _ = suite.Connector.Execute(ctx, suite.ValidOperation, suite.ValidInput, nil)
 		}()
 	}
 	wg.Wait()
@@ -95,7 +95,7 @@ func (suite *ConnectorContractTestSuite) TestAsyncPolling() {
 		for _, op := range describer.Operations() {
 			if op.Name == suite.ValidOperation && op.IsAsync {
 				start := time.Now()
-				_, _ = suite.Connector.Execute(context.Background(), suite.ValidOperation, suite.ValidInput)
+				_, _ = suite.Connector.Execute(context.Background(), suite.ValidOperation, suite.ValidInput, nil)
 				duration := time.Since(start)
 				suite.Less(duration, 500*time.Millisecond, "Async operation should return immediately")
 			}

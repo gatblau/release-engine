@@ -19,7 +19,7 @@ type MockPolicyConnector struct {
 	closed     bool
 	allowAll   bool // if true, all evaluations pass
 	denyAll    bool // if true, all evaluations fail
-	customEval func(ctx context.Context, input map[string]interface{}) (*connector.ConnectorResult, error)
+	customEval func(ctx context.Context, input map[string]interface{}, secrets map[string][]byte) (*connector.ConnectorResult, error)
 }
 
 // NewMockPolicyConnector creates a new mock policy connector.
@@ -54,7 +54,7 @@ func (m *MockPolicyConnector) WithDenyAll() *MockPolicyConnector {
 }
 
 // WithCustomEval configures a custom evaluation function.
-func (m *MockPolicyConnector) WithCustomEval(fn func(ctx context.Context, input map[string]interface{}) (*connector.ConnectorResult, error)) *MockPolicyConnector {
+func (m *MockPolicyConnector) WithCustomEval(fn func(ctx context.Context, input map[string]interface{}, secrets map[string][]byte) (*connector.ConnectorResult, error)) *MockPolicyConnector {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.customEval = fn
@@ -87,7 +87,7 @@ func (m *MockPolicyConnector) Validate(operation string, input map[string]interf
 }
 
 // Execute performs policy evaluation.
-func (m *MockPolicyConnector) Execute(ctx context.Context, operation string, input map[string]interface{}) (*connector.ConnectorResult, error) {
+func (m *MockPolicyConnector) Execute(ctx context.Context, operation string, input map[string]interface{}, secrets map[string][]byte) (*connector.ConnectorResult, error) {
 	m.mu.RLock()
 	if m.closed {
 		m.mu.RUnlock()
@@ -100,7 +100,7 @@ func (m *MockPolicyConnector) Execute(ctx context.Context, operation string, inp
 	}
 
 	if m.customEval != nil {
-		return m.customEval(ctx, input)
+		return m.customEval(ctx, input, secrets)
 	}
 
 	if m.denyAll {

@@ -62,8 +62,14 @@ func (c *PolicyConnector) Validate(operation string, input map[string]interface{
 	return nil
 }
 
+// RequiredSecrets returns the secrets required for policy operations.
+func (c *PolicyConnector) RequiredSecrets(operation string) []string {
+	// Policy connector doesn't require any secrets
+	return []string{}
+}
+
 // Execute performs policy evaluation.
-func (c *PolicyConnector) Execute(ctx context.Context, operation string, input map[string]interface{}) (*connector.ConnectorResult, error) {
+func (c *PolicyConnector) Execute(ctx context.Context, operation string, input map[string]interface{}, secrets map[string][]byte) (*connector.ConnectorResult, error) {
 	c.mu.RLock()
 	if c.closed {
 		c.mu.RUnlock()

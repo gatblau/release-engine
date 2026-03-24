@@ -80,6 +80,14 @@ func (m *Module) Key() string { return ModuleKey }
 
 func (m *Module) Version() string { return ModuleVersion }
 
+// SecretContext implements the connector.SecretContextProvider interface.
+// Infra module always uses platform tenant for secret resolution.
+func (m *Module) SecretContext() connector.SecretContext {
+	return connector.SecretContext{
+		TenantID: "platform",
+	}
+}
+
 // Execute decodes infra params, renders XR manifests, evaluates policy, and waits for approval.
 func (m *Module) Execute(ctx context.Context, api any, params map[string]any) error {
 	step, _ := api.(stepAPI)

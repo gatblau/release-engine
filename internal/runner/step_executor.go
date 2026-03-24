@@ -115,7 +115,9 @@ func (s *StepExecutor) Execute(
 		}
 	}
 
-	res, err = conn.Execute(spanCtx, operation, input)
+	// For Phase 1: Pass empty secrets map
+	// TODO: In Phase 2, integrate with Volta for secret resolution
+	res, err = conn.Execute(spanCtx, operation, input, nil)
 
 	// State Mapping: Normalize results
 	if err != nil && res == nil {
