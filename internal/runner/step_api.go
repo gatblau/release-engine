@@ -8,8 +8,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/gatblau/release-engine/internal/audit"
 	"github.com/gatblau/release-engine/internal/connector"
 	"github.com/gatblau/release-engine/internal/db"
 	"github.com/gatblau/release-engine/internal/logger"
@@ -34,6 +36,7 @@ type stepAPIAdapter struct {
 	contextStore   map[string]any
 	pollInterval   time.Duration
 	logger         *zap.Logger
+	auditService   *audit.AuditService
 	// module is the module that this StepAPI is serving
 	module any
 }
@@ -78,6 +81,32 @@ func NewStepAPIAdapterWithVault(pool db.Pool, familyRegistry connector.FamilyReg
 		pool:           pool,
 		familyRegistry: familyRegistry,
 		vaultManager:   vaultManager,
+		jobID:          jobID,
+		runID:          runID,
+		attempt:        attempt,
+		contextStore:   make(map[string]any),
+		pollInterval:   500 * time.Millisecond,
+		logger:         log,
+	}
+}
+
+// NewStepAPIAdapterWithVaultAndAudit creates the module-facing runtime API for a specific job run with Volta integration and audit logging.
+func NewStepAPIAdapterWithVaultAndAudit(pool db.Pool, familyRegistry connector.FamilyRegistry, vaultManager *secrets.Manager, auditService *audit.AuditService, jobID, runID string, attempt int) StepAPI {
+	// Create a logger for the module execution
+	loggerFactory, err := logger.NewFactory("info", "console")
+	var log *zap.Logger
+	if err != nil {
+		// Fallback to no-op logger if factory creation fails
+		log = zap.NewNop()
+	} else {
+		log = loggerFactory.New(fmt.Sprintf("module.job.%s", jobID))
+	}
+
+	return &stepAPIAdapter{
+		pool:           pool,
+		familyRegistry: familyRegistry,
+		vaultManager:   vaultManager,
+		auditService:   auditService,
 		jobID:          jobID,
 		runID:          runID,
 		attempt:        attempt,
@@ -295,6 +324,39 @@ func (a *stepAPIAdapter) CallConnector(ctx context.Context, req stepapi.Connecto
 		}, nil
 	}
 
+	// Log audit event for secret access attempt
+	if a.auditService != nil {
+		auditEvent := audit.AuditEvent{
+			TenantID:  secretCtx.TenantID,
+			Principal: "system", // System-initiated access
+			Action:    "secret.access",
+			Target:    strings.Join(physicalKeys, ","),
+			Decision:  "granted",
+			Reason:    fmt.Sprintf("Connector %s operation %s requires secrets", req.Connector, req.Operation),
+			Metadata: map[string]string{
+				"connector": req.Connector,
+				"operation": req.Operation,
+				"job_id":    a.jobID,
+				"run_id":    a.runID,
+				"attempt":   fmt.Sprintf("%d", a.attempt),
+			},
+			Timestamp: time.Now().UTC(),
+			JobID:     a.jobID,
+			RunID:     a.runID,
+		}
+		// Log the audit event in background - we don't want audit failure to block execution
+		go func() {
+			auditCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			if err = a.auditService.Record(auditCtx, auditEvent); err != nil {
+				a.logger.Error("failed to record audit event for secret access",
+					zap.String("tenant", secretCtx.TenantID),
+					zap.String("connector", req.Connector),
+					zap.Error(err))
+			}
+		}()
+	}
+
 	// Execute within Volta's secure scope
 	var result *connector.ConnectorResult
 	err = vault.UseSecrets(physicalKeys, func(secrets map[string][]byte) error {
@@ -311,6 +373,38 @@ func (a *stepAPIAdapter) CallConnector(ctx context.Context, req stepapi.Connecto
 	})
 
 	if err != nil {
+		// Log failed audit event if audit service is available
+		if a.auditService != nil {
+			auditEvent := audit.AuditEvent{
+				TenantID:  secretCtx.TenantID,
+				Principal: "system",
+				Action:    "secret.access",
+				Target:    strings.Join(physicalKeys, ","),
+				Decision:  "denied",
+				Reason:    fmt.Sprintf("Secret execution failed: %v", err),
+				Metadata: map[string]string{
+					"connector": req.Connector,
+					"operation": req.Operation,
+					"job_id":    a.jobID,
+					"run_id":    a.runID,
+					"attempt":   fmt.Sprintf("%d", a.attempt),
+					"error":     err.Error(),
+				},
+				Timestamp: time.Now().UTC(),
+				JobID:     a.jobID,
+				RunID:     a.runID,
+			}
+			go func() {
+				auditCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+				defer cancel()
+				if err := a.auditService.Record(auditCtx, auditEvent); err != nil {
+					a.logger.Error("failed to record audit event for secret access failure",
+						zap.String("tenant", secretCtx.TenantID),
+						zap.String("connector", req.Connector),
+						zap.Error(err))
+				}
+			}()
+		}
 		return &stepapi.ConnectorResult{
 			Status: "error",
 			Error: &struct {
