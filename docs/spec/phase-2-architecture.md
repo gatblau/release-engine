@@ -164,6 +164,9 @@ flowchart LR
 | ModuleRegistry | service | 2 | ConfigLoader | low |
 | ConnectorRegistry | service | 2 | ConfigLoader | low |
 | Runner Step Executor | service | 2 | ConnectorRegistry, LoggerFactory, MetricsExporter | medium |
+| SecretContextProvider | interface | 2 | Module runtime | low |
+| SecretRequirer | interface | 2 | Connector runtime | low |
+| StepAPIAdapter (Secret Orchestration) | service | 2 | DBPool, RunnerService, VoltaManager, ModuleRegistry, ConnectorRegistry | high |
 | BaseConnector | pkg | 2 | Shared Types | low |
 | GitHubConnector | service | 2 | BaseConnector, ConnectorConfig, VoltaManager | high |
 | CrossplaneConnector | service | 2 | BaseConnector, ConnectorConfig, VoltaManager, Kubernetes client | high |
