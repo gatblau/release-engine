@@ -14,12 +14,15 @@ type Module interface {
 	Key() string
 	Version() string
 	Execute(ctx context.Context, api any, params map[string]any) error
+	Query(ctx context.Context, api any, req QueryRequest) (QueryResult, error)
+	Describe() ModuleDescriptor
 }
 
 // ModuleRegistry handles module registration and lookup.
 type ModuleRegistry interface {
 	Register(m Module) error
 	Lookup(key, version string) (Module, bool)
+	ListModules() []ModuleDescriptor
 }
 
 type moduleRegistry struct {
@@ -50,4 +53,15 @@ func (r *moduleRegistry) Lookup(key, version string) (Module, bool) {
 	defer r.mu.RUnlock()
 	m, ok := r.modules[fmt.Sprintf("%s:%s", key, version)]
 	return m, ok
+}
+
+func (r *moduleRegistry) ListModules() []ModuleDescriptor {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	descriptors := make([]ModuleDescriptor, 0, len(r.modules))
+	for _, module := range r.modules {
+		descriptors = append(descriptors, module.Describe())
+	}
+	return descriptors
 }

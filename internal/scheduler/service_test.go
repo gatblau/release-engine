@@ -26,6 +26,15 @@ func (m *mockModuleRegistry) Lookup(key, version string) (registry.Module, bool)
 	return mod, ok
 }
 
+func (m *mockModuleRegistry) ListModules() []registry.ModuleDescriptor {
+	args := m.Called()
+	// Return empty slice by default, can be overridden with mock expectations
+	if descriptors, ok := args.Get(0).([]registry.ModuleDescriptor); ok {
+		return descriptors
+	}
+	return []registry.ModuleDescriptor{}
+}
+
 type mockLeaseManager struct {
 	mock.Mock
 }

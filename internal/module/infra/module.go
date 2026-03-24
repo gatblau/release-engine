@@ -80,6 +80,86 @@ func (m *Module) Key() string { return ModuleKey }
 
 func (m *Module) Version() string { return ModuleVersion }
 
+// Query implements the registry.Module interface.
+func (m *Module) Query(ctx context.Context, api any, req registry.QueryRequest) (registry.QueryResult, error) {
+	// Stub implementation - queries not yet supported
+	return registry.QueryResult{
+		Status: "error",
+		Error:  "queries not yet implemented for infra module",
+	}, nil
+}
+
+// Describe implements the registry.Module interface.
+func (m *Module) Describe() registry.ModuleDescriptor {
+	return registry.ModuleDescriptor{
+		Name:   "infra",
+		Domain: "infrastructure",
+		Operations: []registry.OperationDescriptor{
+			{
+				Name:             "provision",
+				RequiresApproval: true,
+				Params: map[string]string{
+					"tenant":         "string",
+					"environment":    "string",
+					"catalogue_item": "string",
+					"owner":          "string",
+					"primary_region": "string",
+				},
+			},
+			{
+				Name:             "deprovision",
+				RequiresApproval: true,
+				Params: map[string]string{
+					"tenant":      "string",
+					"environment": "string",
+					"resource_id": "string",
+				},
+			},
+		},
+		Queries: []registry.QueryDescriptor{
+			{
+				Name:        "list-resources",
+				Description: "List all infrastructure resources",
+				Params: map[string]string{
+					"env":  "string",
+					"kind": "string",
+				},
+			},
+			{
+				Name:        "resource-health",
+				Description: "Get health status of resources",
+				Params: map[string]string{
+					"resource_id": "string",
+				},
+			},
+		},
+		EntityTypes: []registry.EntityTypeDescriptor{
+			{
+				Kind: "rds-instance",
+				Attributes: map[string]string{
+					"engine":         "string",
+					"instance_class": "string",
+					"storage":        "int",
+				},
+			},
+			{
+				Kind: "s3-bucket",
+				Attributes: map[string]string{
+					"name":   "string",
+					"region": "string",
+				},
+			},
+			{
+				Kind: "vpc",
+				Attributes: map[string]string{
+					"cidr":   "string",
+					"region": "string",
+				},
+			},
+		},
+	}
+}
+
 // SecretContext implements the connector.SecretContextProvider interface.
 // Infra module always uses platform tenant for secret resolution.
 func (m *Module) SecretContext() connector.SecretContext {

@@ -59,6 +59,57 @@ func (m *Module) Key() string { return ModuleKey }
 // Version returns the module version.
 func (m *Module) Version() string { return ModuleVersion }
 
+// Query implements the registry.Module interface.
+func (m *Module) Query(ctx context.Context, api any, req registry.QueryRequest) (registry.QueryResult, error) {
+	// Stub implementation - queries not yet supported
+	return registry.QueryResult{
+		Status: "error",
+		Error:  "queries not yet implemented for scaffold module",
+	}, nil
+}
+
+// Describe implements the registry.Module interface.
+func (m *Module) Describe() registry.ModuleDescriptor {
+	return registry.ModuleDescriptor{
+		Name:   "scaffold",
+		Domain: "service-scaffolding",
+		Operations: []registry.OperationDescriptor{
+			{
+				Name:             "create-service",
+				RequiresApproval: false,
+				Params: map[string]string{
+					"customer_id":  "string",
+					"service_name": "string",
+					"owner":        "string",
+					"org":          "string",
+					"template":     "string",
+				},
+			},
+		},
+		Queries: []registry.QueryDescriptor{
+			{
+				Name:        "list-services",
+				Description: "List all scaffolded services",
+				Params: map[string]string{
+					"customer_id": "string",
+					"org":         "string",
+				},
+			},
+		},
+		EntityTypes: []registry.EntityTypeDescriptor{
+			{
+				Kind: "service",
+				Attributes: map[string]string{
+					"name":       "string",
+					"owner":      "string",
+					"repository": "string",
+					"created_at": "timestamp",
+				},
+			},
+		},
+	}
+}
+
 // SecretContext implements the connector.SecretContextProvider interface.
 // Scaffold module resolves tenant from customer ID.
 func (m *Module) SecretContext() connector.SecretContext {

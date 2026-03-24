@@ -80,3 +80,26 @@ func (r *dynamicModuleRegistry) Lookup(key, version string) (registry.Module, bo
 
 	return module, true
 }
+
+func (r *dynamicModuleRegistry) ListModules() []registry.ModuleDescriptor {
+	// For dynamic registry, we need to list modules that can be resolved
+	// This is a simplified implementation that returns descriptors for known modules
+	descriptors := []registry.ModuleDescriptor{}
+
+	// Try to resolve known modules and get their descriptors
+	knownModules := []struct {
+		key     string
+		version string
+	}{
+		{"infra.provision", "latest"},
+		{"scaffolding/create-service", "1.0.0"},
+	}
+
+	for _, km := range knownModules {
+		if module, ok := r.Lookup(km.key, km.version); ok {
+			descriptors = append(descriptors, module.Describe())
+		}
+	}
+
+	return descriptors
+}
