@@ -62,6 +62,17 @@ func (f *Factory) assembleInfraModule(ctx context.Context, rawConfig *config.Mod
 		return nil, fmt.Errorf("failed to resolve git connector %s: %w", typedConfig.Connectors.Git, err)
 	}
 
+	// Crossplane connectors use the generic Connector interface
+	// Crossplane connectors are registered with "infra-" prefix (ConnectorTypeInfra)
+	crossplaneKey := typedConfig.Connectors.Crossplane
+	if !isPrefixedWithInfra(crossplaneKey) {
+		crossplaneKey = "infra-" + crossplaneKey
+	}
+	crossplaneConn, ok := f.connRegistry.Lookup(crossplaneKey)
+	if !ok {
+		return nil, fmt.Errorf("failed to resolve crossplane connector %s (looked up as %s): not found", typedConfig.Connectors.Crossplane, crossplaneKey)
+	}
+
 	policyConn, err := f.connRegistry.ResolvePolicy(typedConfig.Connectors.Policy)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve policy connector %s: %w", typedConfig.Connectors.Policy, err)
@@ -73,7 +84,7 @@ func (f *Factory) assembleInfraModule(ctx context.Context, rawConfig *config.Mod
 	}
 
 	// 6. Call module constructor with typed config and typed connectors
-	module, err := infra.NewModule(typedConfig.Vars, gitConn, policyConn, webhookConn)
+	module, err := infra.NewModule(typedConfig.Vars, gitConn, crossplaneConn, policyConn, webhookConn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create infra module: %w", err)
 	}
@@ -89,4 +100,9 @@ func IsConfigManagedModule(moduleName string) bool {
 		// Add other config-managed modules here as they are migrated
 	}
 	return configManagedModules[moduleName]
+}
+
+// isPrefixedWithInfra checks if a key already has the "infra-" prefix
+func isPrefixedWithInfra(key string) bool {
+	return len(key) > 6 && key[:6] == "infra-"
 }

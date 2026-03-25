@@ -11,5 +11,6 @@ vars:
 connectors:
   families:
     git: github     # Real GitHub API for staging repos
+    crossplane: crossplane  # Real crossplane connector for staging
     policy: opa     # Real OPA policy service
     webhook: http   # Real webhook service

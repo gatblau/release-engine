@@ -25,9 +25,10 @@ type Vars struct {
 
 // ConnectorSelection specifies which connector implementations to use.
 type ConnectorSelection struct {
-	Git     string
-	Policy  string
-	Webhook string
+	Git        string
+	Crossplane string
+	Policy     string
+	Webhook    string
 }
 
 // ParseConfig converts a raw ModuleConfigFile into typed infra Config.
@@ -59,7 +60,7 @@ func ParseConfig(raw *config.ModuleConfigFile) (*Config, error) {
 // RequiredConnectorFamilies returns the list of connector families
 // that the infra module requires to be configured.
 func RequiredConnectorFamilies() []string {
-	return []string{"git", "policy", "webhook"}
+	return []string{"git", "crossplane", "policy", "webhook"}
 }
 
 // parseVars extracts and validates module-specific variables.
@@ -143,12 +144,16 @@ func parseConnectors(connectors config.ConnectorsConfig) (*ConnectorSelection, e
 
 	// Extract implementations
 	result.Git = connectors.Families["git"]
+	result.Crossplane = connectors.Families["crossplane"]
 	result.Policy = connectors.Families["policy"]
 	result.Webhook = connectors.Families["webhook"]
 
 	// Validate that implementations are non-empty strings
 	if result.Git == "" {
 		return nil, fmt.Errorf("git connector implementation cannot be empty")
+	}
+	if result.Crossplane == "" {
+		return nil, fmt.Errorf("crossplane connector implementation cannot be empty")
 	}
 	if result.Policy == "" {
 		return nil, fmt.Errorf("policy connector implementation cannot be empty")

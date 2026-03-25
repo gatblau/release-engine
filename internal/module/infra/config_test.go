@@ -14,7 +14,7 @@ import (
 
 func TestRequiredConnectorFamilies(t *testing.T) {
 	families := RequiredConnectorFamilies()
-	expected := []string{"git", "policy", "webhook"}
+	expected := []string{"git", "crossplane", "policy", "webhook"}
 	assert.Equal(t, expected, families)
 }
 
@@ -28,9 +28,10 @@ func TestParseConfig_ValidConfig(t *testing.T) {
 		},
 		Connectors: config.ConnectorsConfig{
 			Families: map[string]string{
-				"git":     "git-file",
-				"policy":  "policy-mock",
-				"webhook": "webhook-mock",
+				"git":        "git-file",
+				"crossplane": "crossplane-mock",
+				"policy":     "policy-mock",
+				"webhook":    "webhook-mock",
 			},
 		},
 	}
@@ -45,6 +46,7 @@ func TestParseConfig_ValidConfig(t *testing.T) {
 
 	// Check connectors
 	assert.Equal(t, "git-file", cfg.Connectors.Git)
+	assert.Equal(t, "crossplane-mock", cfg.Connectors.Crossplane)
 	assert.Equal(t, "policy-mock", cfg.Connectors.Policy)
 	assert.Equal(t, "webhook-mock", cfg.Connectors.Webhook)
 }
@@ -56,9 +58,10 @@ func TestParseConfig_Defaults(t *testing.T) {
 		Vars:       map[string]any{}, // Empty vars
 		Connectors: config.ConnectorsConfig{
 			Families: map[string]string{
-				"git":     "git-file",
-				"policy":  "policy-mock",
-				"webhook": "webhook-mock",
+				"git":        "git-file",
+				"crossplane": "crossplane-mock",
+				"policy":     "policy-mock",
+				"webhook":    "webhook-mock",
 			},
 		},
 	}
@@ -81,8 +84,9 @@ func TestParseConfig_MissingRequiredConnectorFamily(t *testing.T) {
 		},
 		Connectors: config.ConnectorsConfig{
 			Families: map[string]string{
-				"git":    "git-file",
-				"policy": "policy-mock",
+				"git":        "git-file",
+				"crossplane": "crossplane-mock",
+				"policy":     "policy-mock",
 				// Missing webhook
 			},
 		},
@@ -104,9 +108,10 @@ func TestParseConfig_EmptyConnectorImplementation(t *testing.T) {
 		},
 		Connectors: config.ConnectorsConfig{
 			Families: map[string]string{
-				"git":     "", // Empty
-				"policy":  "policy-mock",
-				"webhook": "webhook-mock",
+				"git":        "", // Empty
+				"crossplane": "crossplane-mock",
+				"policy":     "policy-mock",
+				"webhook":    "webhook-mock",
 			},
 		},
 	}
@@ -128,9 +133,10 @@ func TestParseConfig_InvalidHealthTimeout(t *testing.T) {
 		},
 		Connectors: config.ConnectorsConfig{
 			Families: map[string]string{
-				"git":     "git-file",
-				"policy":  "policy-mock",
-				"webhook": "webhook-mock",
+				"git":        "git-file",
+				"crossplane": "crossplane-mock",
+				"policy":     "policy-mock",
+				"webhook":    "webhook-mock",
 			},
 		},
 	}
@@ -151,9 +157,10 @@ func TestParseConfig_InvalidPollInterval(t *testing.T) {
 		},
 		Connectors: config.ConnectorsConfig{
 			Families: map[string]string{
-				"git":     "git-file",
-				"policy":  "policy-mock",
-				"webhook": "webhook-mock",
+				"git":        "git-file",
+				"crossplane": "crossplane-mock",
+				"policy":     "policy-mock",
+				"webhook":    "webhook-mock",
 			},
 		},
 	}
@@ -181,9 +188,10 @@ func TestParseConfig_PollIntervalGreaterThanHealthTimeout(t *testing.T) {
 		},
 		Connectors: config.ConnectorsConfig{
 			Families: map[string]string{
-				"git":     "git-file",
-				"policy":  "policy-mock",
-				"webhook": "webhook-mock",
+				"git":        "git-file",
+				"crossplane": "crossplane-mock",
+				"policy":     "policy-mock",
+				"webhook":    "webhook-mock",
 			},
 		},
 	}
@@ -204,9 +212,10 @@ func TestParseConfig_ZeroHealthTimeout(t *testing.T) {
 		},
 		Connectors: config.ConnectorsConfig{
 			Families: map[string]string{
-				"git":     "git-file",
-				"policy":  "policy-mock",
-				"webhook": "webhook-mock",
+				"git":        "git-file",
+				"crossplane": "crossplane-mock",
+				"policy":     "policy-mock",
+				"webhook":    "webhook-mock",
 			},
 		},
 	}
@@ -227,9 +236,10 @@ func TestParseConfig_NegativePollInterval(t *testing.T) {
 		},
 		Connectors: config.ConnectorsConfig{
 			Families: map[string]string{
-				"git":     "git-file",
-				"policy":  "policy-mock",
-				"webhook": "webhook-mock",
+				"git":        "git-file",
+				"crossplane": "crossplane-mock",
+				"policy":     "policy-mock",
+				"webhook":    "webhook-mock",
 			},
 		},
 	}
@@ -250,9 +260,10 @@ func TestParseConfig_NonStringDuration(t *testing.T) {
 		},
 		Connectors: config.ConnectorsConfig{
 			Families: map[string]string{
-				"git":     "git-file",
-				"policy":  "policy-mock",
-				"webhook": "webhook-mock",
+				"git":        "git-file",
+				"crossplane": "crossplane-mock",
+				"policy":     "policy-mock",
+				"webhook":    "webhook-mock",
 			},
 		},
 	}
@@ -273,9 +284,10 @@ func TestParseConfig_PollIntervalEqualToHealthTimeout(t *testing.T) {
 		},
 		Connectors: config.ConnectorsConfig{
 			Families: map[string]string{
-				"git":     "git-file",
-				"policy":  "policy-mock",
-				"webhook": "webhook-mock",
+				"git":        "git-file",
+				"crossplane": "crossplane-mock",
+				"policy":     "policy-mock",
+				"webhook":    "webhook-mock",
 			},
 		},
 	}

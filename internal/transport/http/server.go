@@ -5,9 +5,11 @@ package http
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 
+	"github.com/gatblau/release-engine/internal/registry"
 	"github.com/gatblau/release-engine/internal/secrets"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -26,10 +28,11 @@ type server struct {
 	logger         *zap.Logger
 	port           int
 	secretsHandler *SecretsHandler
+	moduleRegistry registry.ModuleRegistry
 }
 
 // NewServer creates a new HTTP server.
-func NewServer(port int, logger *zap.Logger) Server {
+func NewServer(port int, logger *zap.Logger, moduleRegistry registry.ModuleRegistry) Server {
 	e := echo.New()
 	e.HideBanner = true
 	e.Use(middleware.Recover())
@@ -44,14 +47,15 @@ func NewServer(port int, logger *zap.Logger) Server {
 	}))
 
 	return &server{
-		e:      e,
-		logger: logger,
-		port:   port,
+		e:              e,
+		logger:         logger,
+		port:           port,
+		moduleRegistry: moduleRegistry,
 	}
 }
 
 // NewServerWithSecrets creates a new HTTP server with secrets management support.
-func NewServerWithSecrets(port int, logger *zap.Logger, voltaManager *secrets.Manager) Server {
+func NewServerWithSecrets(port int, logger *zap.Logger, voltaManager *secrets.Manager, moduleRegistry registry.ModuleRegistry) Server {
 	e := echo.New()
 	e.HideBanner = true
 	e.Use(middleware.Recover())
@@ -70,12 +74,19 @@ func NewServerWithSecrets(port int, logger *zap.Logger, voltaManager *secrets.Ma
 		logger:         logger,
 		port:           port,
 		secretsHandler: NewSecretsHandler(voltaManager, logger),
+		moduleRegistry: moduleRegistry,
 	}
 }
 
 func (s *server) RegisterRoutes() {
 	jobHandler := NewJobHandler()
 	doraHandler := NewDoraHandler(nil)
+
+	// Create query handler if module registry is available
+	var queryHandler *QueryHandler
+	if s.moduleRegistry != nil {
+		queryHandler = NewQueryHandler(s.moduleRegistry, s.logger)
+	}
 
 	s.e.GET("/healthz", func(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
@@ -111,6 +122,13 @@ func (s *server) RegisterRoutes() {
 	api.GET("/tenants/:tenant/secrets", s.secretsHandler.ListSecrets)
 	api.DELETE("/tenants/:tenant/secrets/:key", s.secretsHandler.DeleteSecret)
 
+	// Query API (only if module registry is available)
+	if queryHandler != nil {
+		api.GET("/modules", queryHandler.ListModules)
+		api.GET("/modules/:module/describe", queryHandler.DescribeModule)
+		api.GET("/query/:module/:query", queryHandler.ExecuteQuery)
+	}
+
 	// Inbound provider webhooks use provider-native authentication and are not
 	// JWT-protected interactive API routes.
 	s.e.POST("/v1/webhooks/dora/:provider", doraHandler.IngestWebhook)
@@ -118,7 +136,7 @@ func (s *server) RegisterRoutes() {
 
 func (s *server) Start(ctx context.Context) error {
 	addr := fmt.Sprintf(":%d", s.port)
-	if err := s.e.Start(addr); err != nil && err != http.ErrServerClosed {
+	if err := s.e.Start(addr); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return &HTTPError{Err: ErrHTTPBindFailed, Code: "HTTP_BIND_FAILED", Detail: map[string]string{"addr": addr, "error": err.Error()}}
 	}
 	return nil

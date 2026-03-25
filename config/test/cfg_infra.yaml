@@ -12,5 +12,6 @@ vars:
 connectors:
   families:
     git: file
+    crossplane: crossplaneMock
     policy: pmock
     webhook: wmock

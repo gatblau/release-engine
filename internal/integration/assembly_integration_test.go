@@ -41,6 +41,7 @@ vars:
 connectors:
   families:
     git: file
+    crossplane: crossplaneMock
     policy: pmock
     webhook: wmock
 `
@@ -53,6 +54,9 @@ connectors:
 
 	// Create mock connectors
 	fileGit, err := connectortesting.NewFileGitConnector(t.TempDir())
+	require.NoError(t, err)
+
+	mockCrossplane, err := connectortesting.NewCrossplaneMockConnector()
 	require.NoError(t, err)
 
 	mockPolicy := &connectortesting.MockConnector{
@@ -94,6 +98,7 @@ connectors:
 
 	// Register connectors with proper keys that match config expectations
 	require.NoError(t, typedReg.Register(fileGit))
+	require.NoError(t, typedReg.Register(mockCrossplane))
 	require.NoError(t, typedReg.Register(mockPolicy))
 	require.NoError(t, typedReg.Register(mockWebhook))
 
@@ -152,6 +157,7 @@ vars:
 connectors:
   families:
     git: file
+    crossplane: crossplaneMock
     policy: pmock
     webhook: wmock
 `
@@ -166,6 +172,7 @@ vars:
 connectors:
   families:
     git: file
+    crossplane: crossplaneMock
     policy: pmock
     webhook: wmock
 `
@@ -180,6 +187,7 @@ vars:
 connectors:
   families:
     git: github
+    crossplane: crossplane
     policy: opa
     webhook: http
 `
@@ -237,8 +245,12 @@ connectors:
 		os.Setenv("CFG_ROOT", devDir)
 		defer os.Unsetenv("CFG_ROOT")
 
+		mockCrossplane, err := connectortesting.NewCrossplaneMockConnector()
+		require.NoError(t, err)
+
 		typedReg := connector.NewTypedConnectorRegistry()
 		require.NoError(t, typedReg.Register(fileGit))
+		require.NoError(t, typedReg.Register(mockCrossplane))
 		require.NoError(t, typedReg.Register(mockPolicy))
 		require.NoError(t, typedReg.Register(mockWebhook))
 
@@ -261,8 +273,12 @@ connectors:
 		os.Setenv("CFG_ROOT", testDir)
 		defer os.Unsetenv("CFG_ROOT")
 
+		mockCrossplane, err := connectortesting.NewCrossplaneMockConnector()
+		require.NoError(t, err)
+
 		typedReg := connector.NewTypedConnectorRegistry()
 		require.NoError(t, typedReg.Register(fileGit))
+		require.NoError(t, typedReg.Register(mockCrossplane))
 		require.NoError(t, typedReg.Register(mockPolicy))
 		require.NoError(t, typedReg.Register(mockWebhook))
 

@@ -31,6 +31,9 @@
 | A-19 | Region & Compliance | Primary production footprint is EU region(s), with retention and erasure controls enforced per compliance requirements. | Explicit EU compliance section. | Legal/compliance controls and data residency guarantees change. |
 | A-20 | Alert Routing | PagerDuty + Slack are available and configured for SLO/canary alerts. | Explicit canary rollback notification path in design. | Automated rollback may lack human escalation and response SLAs. |
 | A-21 | Human-in-the-Loop | Approval gates implemented as a native engine feature using `approval_decisions` table and `steps` table extension. | Explicitly architected for native gate support, eliminating external dependency. | Decision tracking and audit trails for approvals would require external system delegation. |
+| A-22 | Module Query Interface | Modules implement `Query()` and `Describe()` methods alongside `Execute()`, transforming the engine from execution-only to execution+query plane. | Each module owns both its workflows AND the read path for its domain, enabling unified query API. | External systems would need separate query implementations, duplicating domain logic. |
+| A-23 | Query API Surface | HTTP endpoints `/v1/modules`, `/v1/modules/{module}/describe`, and `/v1/query/{module}/{query}` expose module capabilities and query execution. | Provides discovery and query capabilities for agents, UIs, and other consumers. | Alternative query mechanisms would require separate infrastructure and API design. |
+| A-24 | Internal Query Reuse | Modules reuse their own `Query()` logic internally for health checks and remediation decisions during execution. | Single read path used both externally and internally, eliminating duplication. | Separate query implementations would increase maintenance burden and risk divergence. |
 
 ## 1B — Open Questions
 
@@ -262,3 +265,11 @@ validateCallback(url, tenantID):
 | Metrics Exporter | Prometheus scrape endpoint for real-time counters/histograms. | `/metrics` endpoint scraped every 15s. |
 | SLO | Service-level objective with target and measurement window. | Intake success `99.99% / 30 days`. |
 | Canary Rollback | Automated or manual rollback triggered by canary SLI breach. | Error rate >1% for 15-minute window. |
+| Module Query Interface | The `Query()` and `Describe()` methods that modules implement alongside `Execute()`, enabling execution+query plane. | `infra` module implements `Query()` to list resources and `Describe()` to expose capabilities. |
+| Query Handler | Component that routes HTTP query requests to module `Query()` methods. | Handles `GET /v1/query/infra/resources?env=prod` |
+| Module Discovery | Component that serves module capability descriptions via the `Describe()` method. | Serves `/v1/modules` and `/v1/modules/{module}/describe` |
+| Query Request | Structured request to a module's `Query()` method with query name and parameters. | `QueryRequest{Name: "list-resources", Params: {"env": "prod"}}` |
+| Query Result | Structured response from a module's `Query()` method with status, data, and optional error. | `QueryResult{Status: "ok", Data: {"resources": [...]}}` |
+| Module Descriptor | Self-description of a module's capabilities including operations, queries, and entity types. | `ModuleDescriptor{Name: "infra", Domain: "infrastructure", Queries: [...]}` |
+| Execution+Query Plane | Architecture where each module owns both its workflows (execution) AND the read path for its domain (query). | Infra module both provisions resources and answers questions about them. |
+| Internal Query Reuse | Pattern where modules reuse their own `Query()` logic internally for health checks during execution. | Infra module calls its own `Query()` to check resource health during provisioning. |

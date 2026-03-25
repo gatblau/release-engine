@@ -17,14 +17,19 @@ import (
 
 // mockTypedConnectorRegistry implements connector.TypedConnectorRegistry for testing
 type mockTypedConnectorRegistry struct {
-	gitConnector     connector.GitConnector
-	policyConnector  connector.PolicyConnector
-	webhookConnector connector.WebhookConnector
+	gitConnector        connector.GitConnector
+	crossplaneConnector connector.Connector
+	policyConnector     connector.PolicyConnector
+	webhookConnector    connector.WebhookConnector
 }
 
 func (m *mockTypedConnectorRegistry) Register(connector connector.Connector) error { return nil }
 func (m *mockTypedConnectorRegistry) Replace(connector connector.Connector) error  { return nil }
 func (m *mockTypedConnectorRegistry) Lookup(key string) (connector.Connector, bool) {
+	// Return crossplane connector when requested
+	if (key == "crossplane-mock" || key == "infra-crossplane-mock") && m.crossplaneConnector != nil {
+		return m.crossplaneConnector, true
+	}
 	return nil, false
 }
 func (m *mockTypedConnectorRegistry) ListByType(connectorType connector.ConnectorType) []connector.Connector {
@@ -68,6 +73,7 @@ vars:
 connectors:
   families:
     git: git-mock
+    crossplane: crossplane-mock
     policy: policy-mock
     webhook: webhook-mock
 `
@@ -87,14 +93,16 @@ connectors:
 
 	// Create mock connectors
 	mockGit := &mockConnector{key: "git-mock"}
+	mockCrossplane := &mockConnector{key: "crossplane-mock"}
 	mockPolicy := &mockConnector{key: "policy-mock"}
 	mockWebhook := &mockConnector{key: "webhook-mock"}
 
 	// Create mock registry
 	mockRegistry := &mockTypedConnectorRegistry{
-		gitConnector:     mockGit,
-		policyConnector:  mockPolicy,
-		webhookConnector: mockWebhook,
+		gitConnector:        mockGit,
+		crossplaneConnector: mockCrossplane,
+		policyConnector:     mockPolicy,
+		webhookConnector:    mockWebhook,
 	}
 
 	// Create config loader
@@ -220,6 +228,7 @@ vars:
 connectors:
   families:
     git: git-mock
+    crossplane: crossplane-mock
     policy: policy-mock
     webhook: webhook-mock
 `
@@ -239,14 +248,16 @@ connectors:
 
 	// Create mock connectors
 	mockGit := &mockConnector{key: "git-mock"}
+	mockCrossplane := &mockConnector{key: "crossplane-mock"}
 	mockPolicy := &mockConnector{key: "policy-mock"}
 	mockWebhook := &mockConnector{key: "webhook-mock"}
 
 	// Create mock registry
 	mockRegistry := &mockTypedConnectorRegistry{
-		gitConnector:     mockGit,
-		policyConnector:  mockPolicy,
-		webhookConnector: mockWebhook,
+		gitConnector:        mockGit,
+		crossplaneConnector: mockCrossplane,
+		policyConnector:     mockPolicy,
+		webhookConnector:    mockWebhook,
 	}
 
 	// Test bootstrap

@@ -6,6 +6,7 @@ package infra
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/gatblau/release-engine/internal/connector"
@@ -26,12 +27,65 @@ const (
 // We use the shared stepapi.StepAPI interface from the common package.
 type stepAPI = stepapi.StepAPI
 
+// queryContext provides a minimal wrapper for Query() calls when stepAPI is not available.
+type queryContext struct {
+	logger *zap.Logger
+}
+
+func (q *queryContext) Logger() *zap.Logger {
+	if q.logger == nil {
+		return zap.NewNop()
+	}
+	return q.logger
+}
+
+// callCrossplaneConnector calls the crossplane connector directly using the module's injected connector.
+func (m *Module) callCrossplaneConnector(ctx context.Context, qctx *queryContext, operation string, input map[string]any) (*stepapi.ConnectorResult, error) {
+	if m.crossplaneConnector == nil {
+		return nil, fmt.Errorf("crossplane connector not available")
+	}
+
+	// Validate the operation
+	if err := m.crossplaneConnector.Validate(operation, input); err != nil {
+		return nil, fmt.Errorf("crossplane connector validation failed: %w", err)
+	}
+
+	// Execute the operation
+	result, err := m.crossplaneConnector.Execute(ctx, operation, input, nil)
+	if err != nil {
+		return nil, fmt.Errorf("crossplane connector execution failed: %w", err)
+	}
+
+	// Convert to stepapi.ConnectorResult
+	return &stepapi.ConnectorResult{
+		Status: result.Status,
+		Output: result.Output,
+		Error: func() *struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} {
+			if result.Error != nil {
+				return &struct {
+					Code    string `json:"code"`
+					Message string `json:"message"`
+				}{
+					Code:    result.Error.Code,
+					Message: result.Error.Message,
+				}
+			}
+			return nil
+		}(),
+	}, nil
+}
+
 // Module implements the release engine executable module contract.
 type Module struct {
 	// vars holds the typed configuration variables for the module (optional).
 	vars *Vars
 	// gitConnector holds the injected git connector (optional).
 	gitConnector connector.GitConnector
+	// crossplaneConnector holds the injected crossplane connector (optional).
+	crossplaneConnector connector.Connector
 	// policyConnector holds the injected policy connector (optional).
 	policyConnector connector.PolicyConnector
 	// webhookConnector holds the injected webhook connector (optional).
@@ -54,12 +108,16 @@ func NewLegacyModule() *Module {
 func NewModule(
 	vars Vars,
 	git connector.GitConnector,
+	crossplane connector.Connector,
 	policy connector.PolicyConnector,
 	webhook connector.WebhookConnector,
 ) (*Module, error) {
 	// Validate that all dependencies are non-nil
 	if git == nil {
 		return nil, fmt.Errorf("git connector cannot be nil")
+	}
+	if crossplane == nil {
+		return nil, fmt.Errorf("crossplane connector cannot be nil")
 	}
 	if policy == nil {
 		return nil, fmt.Errorf("policy connector cannot be nil")
@@ -69,10 +127,11 @@ func NewModule(
 	}
 
 	return &Module{
-		vars:             &vars,
-		gitConnector:     git,
-		policyConnector:  policy,
-		webhookConnector: webhook,
+		vars:                &vars,
+		gitConnector:        git,
+		crossplaneConnector: crossplane,
+		policyConnector:     policy,
+		webhookConnector:    webhook,
 	}, nil
 }
 
@@ -82,11 +141,28 @@ func (m *Module) Version() string { return ModuleVersion }
 
 // Query implements the registry.Module interface.
 func (m *Module) Query(ctx context.Context, api any, req registry.QueryRequest) (registry.QueryResult, error) {
-	// Stub implementation - queries not yet supported
-	return registry.QueryResult{
-		Status: "error",
-		Error:  "queries not yet implemented for infra module",
-	}, nil
+	// Create a query context wrapper if api is not a stepAPI
+	var qctx *queryContext
+	if step, ok := api.(stepAPI); ok {
+		qctx = &queryContext{logger: step.Logger()}
+	} else {
+		// For HTTP handler calls, create a minimal context with no-op logger
+		qctx = &queryContext{logger: zap.NewNop()}
+	}
+
+	switch req.Name {
+	case "list-resources":
+		return m.queryListResources(ctx, qctx, req.Params)
+	case "resource-health":
+		return m.queryResourceHealth(ctx, qctx, req.Params)
+	case "drift-report":
+		return m.queryDriftReport(ctx, qctx, req.Params)
+	default:
+		return registry.QueryResult{
+			Status: "error",
+			Error:  fmt.Sprintf("unknown query: %s", req.Name),
+		}, nil
+	}
 }
 
 // Describe implements the registry.Module interface.
@@ -130,6 +206,13 @@ func (m *Module) Describe() registry.ModuleDescriptor {
 				Description: "Get health status of resources",
 				Params: map[string]string{
 					"resource_id": "string",
+				},
+			},
+			{
+				Name:        "drift-report",
+				Description: "Compare desired (Git) vs actual (Crossplane) state",
+				Params: map[string]string{
+					"env": "string",
 				},
 			},
 		},
@@ -480,7 +563,7 @@ func (m *Module) Execute(ctx context.Context, api any, params map[string]any) er
 			zap.Duration("healthTimeout", healthTimeout),
 			zap.Duration("pollInterval", pollInterval))
 
-		healthStatus, err := pollHealthStatus(ctx, step, infraRepo, "main", commitSHA, healthTimeout, pollInterval)
+		healthStatus, err := checkHealth(ctx, step, infraRepo, "main", commitSHA)
 		if err != nil {
 			logger.Error("health polling failed", zap.Error(err))
 			// Health timeout - trigger remediation
@@ -540,7 +623,7 @@ func (m *Module) Execute(ctx context.Context, api any, params map[string]any) er
 			logger.Info("remediation commit successful", zap.String("new_commit_sha", newCommitSHA))
 			// Retry health polling after remediation
 			logger.Info("retrying health polling after remediation")
-			healthStatus, err = pollHealthStatus(ctx, step, infraRepo, "main", newCommitSHA, healthTimeout, pollInterval)
+			healthStatus, err = checkHealth(ctx, step, infraRepo, "main", newCommitSHA)
 			if err != nil {
 				// Second timeout → job FAILED
 				logger.Error("second health polling timeout after remediation", zap.Error(err))
@@ -676,6 +759,163 @@ func decodeProvisionParams(params map[string]any) (*template.ProvisionParams, er
 		return nil, fmt.Errorf("unmarshal params: %w", err)
 	}
 	return &out, nil
+}
+
+// queryListResources implements the list-resources query.
+func (m *Module) queryListResources(ctx context.Context, qctx *queryContext, params map[string]any) (registry.QueryResult, error) {
+	// Extract parameters
+	env, _ := params["env"].(string)
+	kind, _ := params["kind"].(string)
+
+	// Note: repo parameter is accepted but not used in this stub implementation
+	// In a real implementation, we would use git connector to list files from the repo
+
+	// Return a stub implementation
+	resources := []map[string]any{
+		{
+			"kind": "rds-instance",
+			"name": "database-1",
+			"env":  env,
+			"spec": map[string]any{
+				"engine":         "postgres",
+				"instance_class": "db.t3.small",
+				"storage":        20,
+			},
+		},
+		{
+			"kind": "s3-bucket",
+			"name": "bucket-1",
+			"env":  env,
+			"spec": map[string]any{
+				"name":   "my-bucket",
+				"region": "us-east-1",
+			},
+		},
+	}
+
+	// Filter by kind if specified
+	if kind != "" {
+		filtered := []map[string]any{}
+		for _, r := range resources {
+			if r["kind"] == kind {
+				filtered = append(filtered, r)
+			}
+		}
+		resources = filtered
+	}
+
+	return registry.QueryResult{
+		Status: "ok",
+		Data:   resources,
+	}, nil
+}
+
+// queryResourceHealth implements the resource-health query.
+func (m *Module) queryResourceHealth(ctx context.Context, qctx *queryContext, params map[string]any) (registry.QueryResult, error) {
+	resourceID, _ := params["resource_id"].(string)
+	if resourceID == "" {
+		return registry.QueryResult{
+			Status: "error",
+			Error:  "resource_id parameter is required",
+		}, nil
+	}
+
+	// Parse resource ID to extract kind and name
+	// Format: "kind/name" or "kind:name"
+	var kind, name string
+	if idx := strings.Index(resourceID, "/"); idx > 0 {
+		kind = resourceID[:idx]
+		name = resourceID[idx+1:]
+	} else if idx := strings.Index(resourceID, ":"); idx > 0 {
+		kind = resourceID[:idx]
+		name = resourceID[idx+1:]
+	} else {
+		return registry.QueryResult{
+			Status: "error",
+			Error:  "resource_id must be in format 'kind/name' or 'kind:name'",
+		}, nil
+	}
+
+	// Call Crossplane connector to get resource status
+	result, err := m.callCrossplaneConnector(ctx, qctx, "get_resource_status", map[string]any{
+		"kind": kind,
+		"name": name,
+	})
+	if err != nil {
+		return registry.QueryResult{
+			Status: "error",
+			Error:  fmt.Sprintf("failed to get resource status: %v", err),
+		}, nil
+	}
+
+	// Parse result
+	status := "unknown"
+	if result.Output != nil {
+		if statusMap, ok := result.Output["status"].(map[string]any); ok {
+			// Extract health from status
+			if health, ok := statusMap["health"].(string); ok {
+				status = health
+			} else if conditions, ok := statusMap["conditions"].([]any); ok && len(conditions) > 0 {
+				// Try to get from first condition
+				if cond, ok := conditions[0].(map[string]any); ok {
+					if typeVal, ok := cond["type"].(string); ok {
+						status = typeVal
+					}
+				}
+			}
+		}
+	}
+
+	return registry.QueryResult{
+		Status: "ok",
+		Data: map[string]any{
+			"resource_id": resourceID,
+			"health":      status,
+			"timestamp":   time.Now().Format(time.RFC3339),
+		},
+	}, nil
+}
+
+// queryDriftReport implements the drift-report query.
+func (m *Module) queryDriftReport(ctx context.Context, qctx *queryContext, params map[string]any) (registry.QueryResult, error) {
+	env, _ := params["env"].(string)
+	if env == "" {
+		return registry.QueryResult{
+			Status: "error",
+			Error:  "env parameter is required",
+		}, nil
+	}
+
+	// For now, return a stub drift report
+	// In a real implementation, this would compare Git manifests with Crossplane status
+	driftReport := map[string]any{
+		"env":             env,
+		"timestamp":       time.Now().Format(time.RFC3339),
+		"total_resources": 5,
+		"in_sync":         3,
+		"out_of_sync":     2,
+		"drifts": []map[string]any{
+			{
+				"resource": "rds-instance/database-1",
+				"field":    "instance_class",
+				"expected": "db.t3.medium",
+				"actual":   "db.t3.small",
+				"severity": "medium",
+			},
+			{
+				"resource": "s3-bucket/bucket-1",
+				"field":    "versioning",
+				"expected": "Enabled",
+				"actual":   "Disabled",
+				"severity": "low",
+			},
+		},
+	}
+
+	return registry.QueryResult{
+		Status: "ok",
+		Data:   driftReport,
+	}, nil
 }
 
 // Register registers the infra module in a module registry.

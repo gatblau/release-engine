@@ -7,13 +7,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gatblau/release-engine/internal/registry"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 )
 
 func TestHTTPServer_Healthz(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
-	srv := NewServer(8080, logger)
+	// Create a mock module registry for testing
+	reg := registry.NewModuleRegistry()
+	srv := NewServer(8080, logger, reg)
 	srv.RegisterRoutes()
 
 	// Direct access to Echo instance to test handler
@@ -36,7 +39,9 @@ func TestHTTPServer_StartAndShutdown(t *testing.T) {
 
 func TestHTTPServer_ShutdownGraceful(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
-	srv := NewServer(0, logger)
+	// Create a mock module registry for testing
+	reg := registry.NewModuleRegistry()
+	srv := NewServer(0, logger, reg)
 	srv.RegisterRoutes()
 
 	// Start server in a goroutine

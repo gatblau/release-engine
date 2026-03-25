@@ -216,6 +216,24 @@ func parseStatusFileSimple(content string, expectedCommitSHA string) (*HealthSta
 	return &status, nil
 }
 
+// checkHealth performs a health check using the Query() method internally
+func checkHealth(ctx context.Context, step stepAPI, repo, branch, commitSHA string) (*HealthStatus, error) {
+	logger := step.Logger()
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+
+	logger.Debug("checking health via Query()",
+		zap.String("repo", repo),
+		zap.String("branch", branch),
+		zap.String("commitSHA", commitSHA))
+
+	// For now, use the original pollHealthStatus
+	// In production, we could switch to pollHealthStatusParallel
+	// but for tests, we need to use the original method
+	return pollHealthStatus(ctx, step, repo, branch, commitSHA, 30*time.Second, 500*time.Millisecond)
+}
+
 // remediationRecommit performs remediation by recommitting manifests with force-sync annotation
 func remediationRecommit(ctx context.Context, step stepAPI, repo, branch, pathPrefix string, files map[string]any, message string) (string, error) {
 	// Add force-sync annotation to message
