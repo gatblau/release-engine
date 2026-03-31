@@ -32,10 +32,16 @@ func TestFamilyRegistry(t *testing.T) {
 	familyReg := NewFamilyRegistry(concreteReg)
 
 	// Create test connectors
-	baseGit, _ := NewBaseConnector(ConnectorTypeGit, "github")
+	baseGit, err := NewBaseConnector(ConnectorTypeGit, "github")
+	if err != nil {
+		t.Fatalf("failed to create git base connector: %v", err)
+	}
 	gitConn := &testConnector{BaseConnector: baseGit, operations: []string{"commit_files", "read_file"}}
 
-	basePolicy, _ := NewBaseConnector(ConnectorTypeOther, "policy")
+	basePolicy, err := NewBaseConnector(ConnectorTypePolicy, "embedded")
+	if err != nil {
+		t.Fatalf("failed to create policy base connector: %v", err)
+	}
 	policyConn := &testConnector{BaseConnector: basePolicy, operations: []string{"evaluate"}}
 
 	// Register connectors
@@ -46,9 +52,10 @@ func TestFamilyRegistry(t *testing.T) {
 		t.Fatalf("failed to register policy connector: %v", err)
 	}
 
-	// Register families
+	// Register families with Members
 	gitFamily := ConnectorFamily{
-		Name: "git",
+		Name:    "git",
+		Members: []string{"git-github"},
 		Operations: map[string]OperationContract{
 			"commit_files": {RequiredInputFields: []string{"repo", "branch", "path_prefix", "files", "message", "idempotency_key"}},
 			"read_file":    {RequiredInputFields: []string{"repo", "branch", "path"}},
@@ -56,7 +63,8 @@ func TestFamilyRegistry(t *testing.T) {
 	}
 
 	policyFamily := ConnectorFamily{
-		Name: "policy",
+		Name:    "policy",
+		Members: []string{"policy-embedded"},
 		Operations: map[string]OperationContract{
 			"evaluate": {RequiredInputFields: []string{"policy_bundle", "resource"}},
 		},
@@ -69,16 +77,8 @@ func TestFamilyRegistry(t *testing.T) {
 		t.Fatalf("failed to register policy family: %v", err)
 	}
 
-	// Bind implementations
-	if err := familyReg.BindImplementation("git", "git-github"); err != nil {
-		t.Fatalf("failed to bind git family: %v", err)
-	}
-	if err := familyReg.BindImplementation("policy", "other-policy"); err != nil {
-		t.Fatalf("failed to bind policy family: %v", err)
-	}
-
-	// Test resolution
-	conn, err := familyReg.Resolve("git")
+	// Test resolution with per-module selection
+	conn, err := familyReg.Resolve("git", "github")
 	if err != nil {
 		t.Fatalf("failed to resolve git family: %v", err)
 	}
@@ -86,19 +86,59 @@ func TestFamilyRegistry(t *testing.T) {
 		t.Errorf("expected git-github connector, got %s", conn.Key())
 	}
 
-	// Test validation
-	if err := familyReg.ValidateBindings(); err != nil {
-		t.Errorf("validation should pass: %v", err)
+	// Test resolving policy with its member
+	policyResolved, err := familyReg.Resolve("policy", "policy-embedded")
+	if err != nil {
+		t.Fatalf("failed to resolve policy family: %v", err)
+	}
+	if policyResolved.Key() != "policy-embedded" {
+		t.Errorf("expected policy-embedded connector, got %s", policyResolved.Key())
+	}
+}
+
+func TestFamilyRegistryUnknownFamily(t *testing.T) {
+	concreteReg := NewConnectorRegistry()
+	familyReg := NewFamilyRegistry(concreteReg)
+
+	gitFamily := ConnectorFamily{
+		Name:    "git",
+		Members: []string{"git-github"},
+		Operations: map[string]OperationContract{
+			"commit_files": {RequiredInputFields: []string{"repo", "branch"}},
+		},
 	}
 
-	// Test missing binding error
-	familyReg2 := NewFamilyRegistry(concreteReg)
-	if err := familyReg2.RegisterFamily(gitFamily); err != nil {
+	if err := familyReg.RegisterFamily(gitFamily); err != nil {
 		t.Fatalf("failed to register git family: %v", err)
 	}
-	err = familyReg2.ValidateBindings()
-	if err == nil || !strings.Contains(err.Error(), "family git has no bound implementation") {
-		t.Errorf("expected validation error about missing binding, got: %v", err)
+
+	// Try to resolve unknown family
+	_, err := familyReg.Resolve("unknown", "git-github")
+	if err == nil || !strings.Contains(err.Error(), "unknown family: unknown") {
+		t.Errorf("expected error about unknown family, got: %v", err)
+	}
+}
+
+func TestFamilyRegistryInvalidMember(t *testing.T) {
+	concreteReg := NewConnectorRegistry()
+	familyReg := NewFamilyRegistry(concreteReg)
+
+	gitFamily := ConnectorFamily{
+		Name:    "git",
+		Members: []string{"git-github", "git-gitea"},
+		Operations: map[string]OperationContract{
+			"commit_files": {RequiredInputFields: []string{"repo", "branch"}},
+		},
+	}
+
+	if err := familyReg.RegisterFamily(gitFamily); err != nil {
+		t.Fatalf("failed to register git family: %v", err)
+	}
+
+	// Try to resolve with member not in the family
+	_, err := familyReg.Resolve("git", "git-gitlab")
+	if err == nil || !strings.Contains(err.Error(), "git-gitlab is not a member of family git") {
+		t.Errorf("expected error about not being a member, got: %v", err)
 	}
 }
 
@@ -107,9 +147,10 @@ func TestFamilyRegistryMissingConnector(t *testing.T) {
 	familyReg := NewFamilyRegistry(concreteReg)
 
 	gitFamily := ConnectorFamily{
-		Name: "git",
+		Name:    "git",
+		Members: []string{"git-github", "git-nonexistent"},
 		Operations: map[string]OperationContract{
-			"commit_files": {RequiredInputFields: []string{"repo", "branch", "path_prefix", "files", "message", "idempotency_key"}},
+			"commit_files": {RequiredInputFields: []string{"repo", "branch"}},
 		},
 	}
 
@@ -117,60 +158,41 @@ func TestFamilyRegistryMissingConnector(t *testing.T) {
 		t.Fatalf("failed to register git family: %v", err)
 	}
 
-	// Try to bind to non-existent connector
-	err := familyReg.BindImplementation("git", "git-nonexistent")
+	// Try to resolve a member that's in the family but not registered
+	_, err := familyReg.Resolve("git", "git-nonexistent")
 	if err == nil || !strings.Contains(err.Error(), "connector not found") {
 		t.Errorf("expected error about connector not found, got: %v", err)
 	}
 }
 
-func TestFamilyRegistryContractViolation(t *testing.T) {
-	concreteReg := NewConnectorRegistry()
-	familyReg := NewFamilyRegistry(concreteReg)
-
-	// Create connector with only one operation
-	baseGit, _ := NewBaseConnector(ConnectorTypeGit, "github")
-	gitConn := &testConnector{BaseConnector: baseGit, operations: []string{"commit_files"}}
-
-	if err := concreteReg.Register(gitConn); err != nil {
-		t.Fatalf("failed to register git connector: %v", err)
+func TestConnectorFamilyHasMember(t *testing.T) {
+	family := ConnectorFamily{
+		Name:    "git",
+		Members: []string{"git-github", "git-gitea"},
 	}
 
-	// Register family requiring two operations
-	gitFamily := ConnectorFamily{
-		Name: "git",
-		Operations: map[string]OperationContract{
-			"commit_files": {RequiredInputFields: []string{"repo", "branch", "path_prefix", "files", "message", "idempotency_key"}},
-			"read_file":    {RequiredInputFields: []string{"repo", "branch", "path"}},
-		},
+	if !family.HasMember("git-github") {
+		t.Error("expected HasMember to return true for git-github")
 	}
-
-	if err := familyReg.RegisterFamily(gitFamily); err != nil {
-		t.Fatalf("failed to register git family: %v", err)
+	if !family.HasMember("git-gitea") {
+		t.Error("expected HasMember to return true for git-gitea")
 	}
-
-	if err := familyReg.BindImplementation("git", "git-github"); err != nil {
-		t.Fatalf("failed to bind git family: %v", err)
-	}
-
-	// Validation should fail
-	err := familyReg.ValidateBindings()
-	if err == nil || !strings.Contains(err.Error(), "operation read_file not supported") {
-		t.Errorf("expected validation error about missing operation, got: %v", err)
+	if family.HasMember("git-gitlab") {
+		t.Error("expected HasMember to return false for git-gitlab")
 	}
 }
 
 func TestSetupFamilyRegistry(t *testing.T) {
 	concreteReg := NewConnectorRegistry()
 
-	// Create test connectors
+	// Create test connectors with keys that match DefaultFamilies() members
 	baseGit, _ := NewBaseConnector(ConnectorTypeGit, "github")
 	gitConn := &testConnector{BaseConnector: baseGit, operations: []string{"commit_files", "read_file"}}
 
-	basePolicy, _ := NewBaseConnector(ConnectorTypeOther, "mockpolicy")
+	basePolicy, _ := NewBaseConnector(ConnectorTypePolicy, "embedded")
 	policyConn := &testConnector{BaseConnector: basePolicy, operations: []string{"evaluate"}}
 
-	baseWebhook, _ := NewBaseConnector(ConnectorTypeOther, "mockwebhook")
+	baseWebhook, _ := NewBaseConnector(ConnectorTypeOther, "webhook")
 	webhookConn := &testConnector{BaseConnector: baseWebhook, operations: []string{"post_callback"}}
 
 	// Register connectors
@@ -184,18 +206,32 @@ func TestSetupFamilyRegistry(t *testing.T) {
 		t.Fatalf("failed to register webhook connector: %v", err)
 	}
 
-	// Test setup without config file - should fail because no bindings
-	_, err := SetupFamilyRegistry(concreteReg, "")
-	if err == nil {
-		t.Fatalf("expected setup to fail without bindings, but it succeeded")
+	// Test setup - should succeed with the new design (no global bindings required)
+	familyReg, err := SetupFamilyRegistry(concreteReg, "")
+	if err != nil {
+		t.Fatalf("SetupFamilyRegistry failed: %v", err)
 	}
 
-	// Verify error message mentions missing bindings
-	if !strings.Contains(err.Error(), "family git has no bound implementation") ||
-		!strings.Contains(err.Error(), "family policy has no bound implementation") ||
-		!strings.Contains(err.Error(), "family webhook has no bound implementation") {
-		t.Errorf("expected error about missing bindings, got: %v", err)
+	// Verify families are registered
+	families := familyReg.GetFamilies()
+	if len(families) == 0 {
+		t.Error("expected families to be registered")
 	}
 
-	// Note: we cannot call GetFamilies() because SetupFamilyRegistry failed
+	// Verify each default family is present
+	expectedFamilies := []string{"git", "policy", "webhook", "infra"}
+	for _, expected := range expectedFamilies {
+		if _, ok := families[expected]; !ok {
+			t.Errorf("expected family %s to be registered", expected)
+		}
+	}
+
+	// Test per-module resolution works
+	gitResolved, err := familyReg.Resolve("git", "github")
+	if err != nil {
+		t.Fatalf("failed to resolve git-github: %v", err)
+	}
+	if gitResolved.Key() != "git-github" {
+		t.Errorf("expected git-github, got %s", gitResolved.Key())
+	}
 }

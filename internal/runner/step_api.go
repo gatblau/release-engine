@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -37,8 +38,21 @@ type stepAPIAdapter struct {
 	pollInterval   time.Duration
 	logger         *zap.Logger
 	auditService   *audit.AuditService
+	tenantID       string
 	// module is the module that this StepAPI is serving
 	module any
+	// resolvedConnectors stores connectors resolved at module assembly time
+	// Key: family name, Value: resolved connector
+	resolvedConnectors map[string]connector.Connector
+}
+
+func runnerPollInterval() time.Duration {
+	if raw := strings.TrimSpace(os.Getenv("RUNNER_POLL_INTERVAL")); raw != "" {
+		if d, err := time.ParseDuration(raw); err == nil && d > 0 {
+			return d
+		}
+	}
+	return 500 * time.Millisecond
 }
 
 // NewStepAPIAdapter creates the module-facing runtime API for a specific job run.
@@ -60,7 +74,7 @@ func NewStepAPIAdapter(pool db.Pool, familyRegistry connector.FamilyRegistry, jo
 		runID:          runID,
 		attempt:        attempt,
 		contextStore:   make(map[string]any),
-		pollInterval:   500 * time.Millisecond,
+		pollInterval:   runnerPollInterval(),
 		logger:         log,
 	}
 }
@@ -85,7 +99,7 @@ func NewStepAPIAdapterWithVault(pool db.Pool, familyRegistry connector.FamilyReg
 		runID:          runID,
 		attempt:        attempt,
 		contextStore:   make(map[string]any),
-		pollInterval:   500 * time.Millisecond,
+		pollInterval:   runnerPollInterval(),
 		logger:         log,
 	}
 }
@@ -111,7 +125,7 @@ func NewStepAPIAdapterWithVaultAndAudit(pool db.Pool, familyRegistry connector.F
 		runID:          runID,
 		attempt:        attempt,
 		contextStore:   make(map[string]any),
-		pollInterval:   500 * time.Millisecond,
+		pollInterval:   runnerPollInterval(),
 		logger:         log,
 	}
 }
@@ -121,6 +135,31 @@ func NewStepAPIAdapterWithModule(pool db.Pool, familyRegistry connector.FamilyRe
 	adapter := NewStepAPIAdapter(pool, familyRegistry, jobID, runID, attempt).(*stepAPIAdapter)
 	adapter.module = module
 	return adapter
+}
+
+// NewStepAPIAdapterWithConnectors creates the module-facing runtime API with pre-resolved connectors.
+// This is used by the config-managed module assembly path where connectors are resolved at assembly time.
+func NewStepAPIAdapterWithConnectors(pool db.Pool, jobID, runID string, attempt int, module any, connectors map[string]connector.Connector) StepAPI {
+	// Create a logger for the module execution
+	loggerFactory, err := logger.NewFactory("info", "console")
+	var log *zap.Logger
+	if err != nil {
+		log = zap.NewNop()
+	} else {
+		log = loggerFactory.New(fmt.Sprintf("module.job.%s", jobID))
+	}
+
+	return &stepAPIAdapter{
+		pool:               pool,
+		jobID:              jobID,
+		runID:              runID,
+		attempt:            attempt,
+		module:             module,
+		contextStore:       make(map[string]any),
+		pollInterval:       runnerPollInterval(),
+		logger:             log,
+		resolvedConnectors: connectors,
+	}
 }
 
 func (a *stepAPIAdapter) BeginStep(stepKey string) error {
@@ -159,6 +198,7 @@ func (a *stepAPIAdapter) EndStepOK(stepKey string, output map[string]any) error 
 }
 
 func (a *stepAPIAdapter) EndStepErr(stepKey, code, msg string) error {
+	a.logger.Error("step failed", zap.String("step", stepKey), zap.String("code", code), zap.String("message", msg))
 	conn, err := a.pool.Acquire(context.Background())
 	if err != nil {
 		return fmt.Errorf("failed to acquire db connection: %w", err)
@@ -185,9 +225,41 @@ func (a *stepAPIAdapter) EndStepErr(stepKey, code, msg string) error {
 }
 
 func (a *stepAPIAdapter) CallConnector(ctx context.Context, req stepapi.ConnectorRequest) (*stepapi.ConnectorResult, error) {
-	// Look up connector via family registry
-	conn, err := a.familyRegistry.Resolve(req.Connector)
-	if err != nil {
+	// Look up connector from pre-resolved connectors (set at module assembly time)
+	var conn connector.Connector
+	var err error
+
+	if a.resolvedConnectors != nil {
+		var ok bool
+		conn, ok = a.resolvedConnectors[req.Connector]
+		if !ok {
+			return &stepapi.ConnectorResult{
+				Status: "error",
+				Error: &struct {
+					Code    string `json:"code"`
+					Message string `json:"message"`
+				}{
+					Code:    "CONNECTOR_NOT_FOUND",
+					Message: fmt.Sprintf("no connector resolved for family %q", req.Connector),
+				},
+			}, nil
+		}
+	} else if a.familyRegistry != nil {
+		// Fallback to family registry resolution for legacy modules
+		conn, err = a.familyRegistry.Resolve(req.Connector, req.ImplKey)
+		if err != nil {
+			return &stepapi.ConnectorResult{
+				Status: "error",
+				Error: &struct {
+					Code    string `json:"code"`
+					Message string `json:"message"`
+				}{
+					Code:    "CONNECTOR_NOT_FOUND",
+					Message: fmt.Sprintf("connector family %s with impl %s not resolved: %v", req.Connector, req.ImplKey, err),
+				},
+			}, nil
+		}
+	} else {
 		return &stepapi.ConnectorResult{
 			Status: "error",
 			Error: &struct {
@@ -195,7 +267,7 @@ func (a *stepAPIAdapter) CallConnector(ctx context.Context, req stepapi.Connecto
 				Message string `json:"message"`
 			}{
 				Code:    "CONNECTOR_NOT_FOUND",
-				Message: fmt.Sprintf("connector family not resolved: %s", req.Connector),
+				Message: fmt.Sprintf("no connector available for family %q", req.Connector),
 			},
 		}, nil
 	}
@@ -273,17 +345,20 @@ func (a *stepAPIAdapter) CallConnector(ctx context.Context, req stepapi.Connecto
 			}, nil
 		}
 	} else {
-		// No module reference available (should not happen in normal execution)
-		return &stepapi.ConnectorResult{
-			Status: "error",
-			Error: &struct {
-				Code    string `json:"code"`
-				Message string `json:"message"`
-			}{
-				Code:    "MODULE_MISSING",
-				Message: "module reference not available for secret resolution",
-			},
-		}, nil
+		if a.tenantID != "" {
+			secretCtx = connector.SecretContext{TenantID: a.tenantID}
+		} else {
+			return &stepapi.ConnectorResult{
+				Status: "error",
+				Error: &struct {
+					Code    string `json:"code"`
+					Message string `json:"message"`
+				}{
+					Code:    "MODULE_MISSING",
+					Message: "module reference not available for secret resolution",
+				},
+			}, nil
+		}
 	}
 
 	// Check if vault manager is available
@@ -304,7 +379,7 @@ func (a *stepAPIAdapter) CallConnector(ctx context.Context, req stepapi.Connecto
 	physicalToLogical := make(map[string]string, len(requiredSecrets))
 	physicalKeys := make([]string, len(requiredSecrets))
 	for i, logicalKey := range requiredSecrets {
-		physical := fmt.Sprintf("tenants/%s/%s", secretCtx.TenantID, logicalKey)
+		physical := logicalKey
 		physicalKeys[i] = physical
 		physicalToLogical[physical] = logicalKey
 	}
@@ -450,6 +525,10 @@ func (a *stepAPIAdapter) IsCancelled() bool {
 
 func (a *stepAPIAdapter) Logger() *zap.Logger {
 	return a.logger
+}
+
+func (a *stepAPIAdapter) ResolveSecret(ctx context.Context, tenantID, key string) (string, error) {
+	return "", fmt.Errorf("secret resolution not configured")
 }
 
 func (a *stepAPIAdapter) WaitForApproval(ctx context.Context, req stepapi.ApprovalRequest) (stepapi.ApprovalOutcome, error) {

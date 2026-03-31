@@ -5,6 +5,7 @@ package runner
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -30,6 +31,9 @@ func (m *mockTypedConnectorRegistry) Lookup(key string) (connector.Connector, bo
 	if (key == "crossplane-mock" || key == "infra-crossplane-mock") && m.crossplaneConnector != nil {
 		return m.crossplaneConnector, true
 	}
+	if key == "git-mock" && m.gitConnector != nil {
+		return m.gitConnector, true
+	}
 	return nil, false
 }
 func (m *mockTypedConnectorRegistry) ListByType(connectorType connector.ConnectorType) []connector.Connector {
@@ -44,6 +48,41 @@ func (m *mockTypedConnectorRegistry) ResolvePolicy(name string) (connector.Polic
 }
 func (m *mockTypedConnectorRegistry) ResolveWebhook(name string) (connector.WebhookConnector, error) {
 	return m.webhookConnector, nil
+}
+
+// mockFamilyRegistry implements connector.FamilyRegistry for testing
+type mockFamilyRegistry struct {
+	connectors map[string]map[string]connector.Connector // family -> implKey -> connector
+}
+
+func newMockFamilyRegistry() *mockFamilyRegistry {
+	return &mockFamilyRegistry{
+		connectors: make(map[string]map[string]connector.Connector),
+	}
+}
+
+func (m *mockFamilyRegistry) addConnector(family, implKey string, conn connector.Connector) {
+	if m.connectors[family] == nil {
+		m.connectors[family] = make(map[string]connector.Connector)
+	}
+	m.connectors[family][implKey] = conn
+}
+
+func (m *mockFamilyRegistry) RegisterFamily(family connector.ConnectorFamily) error {
+	return nil
+}
+
+func (m *mockFamilyRegistry) Resolve(family, implKey string) (connector.Connector, error) {
+	if familyConnectors, ok := m.connectors[family]; ok {
+		if conn, ok := familyConnectors[implKey]; ok {
+			return conn, nil
+		}
+	}
+	return nil, fmt.Errorf("connector not found: family=%s, impl=%s", family, implKey)
+}
+
+func (m *mockFamilyRegistry) GetFamilies() map[string]connector.ConnectorFamily {
+	return make(map[string]connector.ConnectorFamily)
 }
 
 // mockConnector implements connector.Connector for testing
@@ -105,6 +144,13 @@ connectors:
 		webhookConnector:    mockWebhook,
 	}
 
+	// Create mock family registry with connectors
+	mockFamilyReg := newMockFamilyRegistry()
+	mockFamilyReg.addConnector("git", "git-mock", mockGit)
+	mockFamilyReg.addConnector("infra", "crossplane-mock", mockCrossplane)
+	mockFamilyReg.addConnector("policy", "policy-mock", mockPolicy)
+	mockFamilyReg.addConnector("webhook", "webhook-mock", mockWebhook)
+
 	// Create config loader
 	configLoader := config.NewLoader(tempDir)
 
@@ -113,7 +159,7 @@ connectors:
 	require.NoError(t, err)
 
 	// Create resolver
-	resolver := NewResolver(configLoader, mockRegistry, legacyRegistry)
+	resolver := NewResolver(configLoader, mockRegistry, mockFamilyReg, legacyRegistry)
 
 	// Test resolving infra module
 	ctx := context.Background()
@@ -130,6 +176,7 @@ connectors:
 func TestResolver_ResolveModule_LegacyModule(t *testing.T) {
 	// Create mock registry
 	mockRegistry := &mockTypedConnectorRegistry{}
+	mockFamilyReg := newMockFamilyRegistry()
 
 	// Create config loader with default path
 	configLoader := config.NewLoader(".")
@@ -139,7 +186,7 @@ func TestResolver_ResolveModule_LegacyModule(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create resolver
-	resolver := NewResolver(configLoader, mockRegistry, legacyRegistry)
+	resolver := NewResolver(configLoader, mockRegistry, mockFamilyReg, legacyRegistry)
 
 	// Test resolving infra module (should fall back to legacy since no config file)
 	ctx := context.Background()
@@ -152,6 +199,7 @@ func TestResolver_ResolveModule_LegacyModule(t *testing.T) {
 func TestResolver_ResolveModule_NonExistentModule(t *testing.T) {
 	// Create mock registry
 	mockRegistry := &mockTypedConnectorRegistry{}
+	mockFamilyReg := newMockFamilyRegistry()
 
 	// Create config loader
 	configLoader := config.NewLoader(".")
@@ -161,7 +209,7 @@ func TestResolver_ResolveModule_NonExistentModule(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create resolver
-	resolver := NewResolver(configLoader, mockRegistry, legacyRegistry)
+	resolver := NewResolver(configLoader, mockRegistry, mockFamilyReg, legacyRegistry)
 
 	// Test resolving non-existent module
 	ctx := context.Background()
@@ -204,11 +252,12 @@ func TestNewConfigAwareModuleResolver(t *testing.T) {
 		}
 	}()
 
-	// Create mock registry
+	// Create mock registries
 	mockRegistry := &mockTypedConnectorRegistry{}
+	mockFamilyReg := newMockFamilyRegistry()
 
 	// Test creating resolver
-	resolver, err := NewConfigAwareModuleResolver(mockRegistry)
+	resolver, err := NewConfigAwareModuleResolver(mockRegistry, mockFamilyReg)
 	require.NoError(t, err)
 	require.NotNil(t, resolver)
 }
@@ -260,9 +309,16 @@ connectors:
 		webhookConnector:    mockWebhook,
 	}
 
+	// Create mock family registry with connectors
+	mockFamilyReg := newMockFamilyRegistry()
+	mockFamilyReg.addConnector("git", "git-mock", mockGit)
+	mockFamilyReg.addConnector("infra", "crossplane-mock", mockCrossplane)
+	mockFamilyReg.addConnector("policy", "policy-mock", mockPolicy)
+	mockFamilyReg.addConnector("webhook", "webhook-mock", mockWebhook)
+
 	// Test bootstrap
 	ctx := context.Background()
-	registry, err := BootstrapWithConfig(ctx, mockRegistry)
+	registry, err := BootstrapWithConfig(ctx, mockRegistry, mockFamilyReg)
 	require.NoError(t, err)
 	require.NotNil(t, registry)
 

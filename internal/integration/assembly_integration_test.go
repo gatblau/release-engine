@@ -61,7 +61,7 @@ connectors:
 
 	mockPolicy := &connectortesting.MockConnector{
 		BaseConnector: func() connector.BaseConnector {
-			base, err := connector.NewBaseConnector(connector.ConnectorTypeOther, "pmock")
+			base, err := connector.NewBaseConnector(connector.ConnectorTypePolicy, "pmock")
 			require.NoError(t, err)
 			return base
 		}(),
@@ -78,7 +78,7 @@ connectors:
 
 	mockWebhook := &connectortesting.MockConnector{
 		BaseConnector: func() connector.BaseConnector {
-			base, err := connector.NewBaseConnector(connector.ConnectorTypeOther, "wmock")
+			base, err := connector.NewBaseConnector(connector.ConnectorTypeWebHook, "wmock")
 			require.NoError(t, err)
 			return base
 		}(),
@@ -102,6 +102,12 @@ connectors:
 	require.NoError(t, typedReg.Register(mockPolicy))
 	require.NoError(t, typedReg.Register(mockWebhook))
 
+	// Create family registry
+	familyReg := connector.NewFamilyRegistry(typedReg)
+	for _, family := range connector.DefaultFamilies() {
+		require.NoError(t, familyReg.RegisterFamily(family))
+	}
+
 	// Create config loader
 	configLoader := config.NewLoader(devConfigDir)
 
@@ -109,7 +115,7 @@ connectors:
 	legacyReg := registry.NewModuleRegistry()
 
 	// Create resolver
-	resolver := runner.NewResolver(configLoader, typedReg, legacyReg)
+	resolver := runner.NewResolver(configLoader, typedReg, familyReg, legacyReg)
 
 	// Test resolving infra module as config-managed module
 	ctx := context.Background()
@@ -202,7 +208,7 @@ connectors:
 
 	mockPolicy := &connectortesting.MockConnector{
 		BaseConnector: func() connector.BaseConnector {
-			base, err := connector.NewBaseConnector(connector.ConnectorTypeOther, "pmock")
+			base, err := connector.NewBaseConnector(connector.ConnectorTypePolicy, "pmock")
 			require.NoError(t, err)
 			return base
 		}(),
@@ -210,7 +216,7 @@ connectors:
 
 	mockWebhook := &connectortesting.MockConnector{
 		BaseConnector: func() connector.BaseConnector {
-			base, err := connector.NewBaseConnector(connector.ConnectorTypeOther, "wmock")
+			base, err := connector.NewBaseConnector(connector.ConnectorTypeWebHook, "wmock")
 			require.NoError(t, err)
 			return base
 		}(),
@@ -254,9 +260,15 @@ connectors:
 		require.NoError(t, typedReg.Register(mockPolicy))
 		require.NoError(t, typedReg.Register(mockWebhook))
 
+		// Create family registry
+		familyReg := connector.NewFamilyRegistry(typedReg)
+		for _, family := range connector.DefaultFamilies() {
+			require.NoError(t, familyReg.RegisterFamily(family))
+		}
+
 		configLoader := config.NewLoader(devDir)
 		legacyReg := registry.NewModuleRegistry()
-		resolver := runner.NewResolver(configLoader, typedReg, legacyReg)
+		resolver := runner.NewResolver(configLoader, typedReg, familyReg, legacyReg)
 
 		ctx := context.Background()
 		module, err := resolver.ResolveModule(ctx, infra.ModuleKey, infra.ModuleVersion)
@@ -282,9 +294,15 @@ connectors:
 		require.NoError(t, typedReg.Register(mockPolicy))
 		require.NoError(t, typedReg.Register(mockWebhook))
 
+		// Create family registry for test environment
+		familyReg := connector.NewFamilyRegistry(typedReg)
+		for _, family := range connector.DefaultFamilies() {
+			require.NoError(t, familyReg.RegisterFamily(family))
+		}
+
 		configLoader := config.NewLoader(testDir)
 		legacyReg := registry.NewModuleRegistry()
-		resolver := runner.NewResolver(configLoader, typedReg, legacyReg)
+		resolver := runner.NewResolver(configLoader, typedReg, familyReg, legacyReg)
 
 		ctx := context.Background()
 		module, err := resolver.ResolveModule(ctx, infra.ModuleKey, infra.ModuleVersion)
@@ -306,9 +324,15 @@ connectors:
 		require.NoError(t, typedReg.Register(opaPolicy))
 		require.NoError(t, typedReg.Register(httpWebhook))
 
+		// Create family registry for staging environment
+		familyReg := connector.NewFamilyRegistry(typedReg)
+		for _, family := range connector.DefaultFamilies() {
+			require.NoError(t, familyReg.RegisterFamily(family))
+		}
+
 		configLoader := config.NewLoader(stagingDir)
 		legacyReg := registry.NewModuleRegistry()
-		resolver := runner.NewResolver(configLoader, typedReg, legacyReg)
+		resolver := runner.NewResolver(configLoader, typedReg, familyReg, legacyReg)
 
 		ctx := context.Background()
 		_, err := resolver.ResolveModule(ctx, infra.ModuleKey, infra.ModuleVersion)
@@ -335,6 +359,12 @@ func TestAssemblyIntegration_FailFastOnMissingConfig(t *testing.T) {
 	// Create typed connector registry
 	typedReg := connector.NewTypedConnectorRegistry()
 
+	// Create family registry
+	familyReg := connector.NewFamilyRegistry(typedReg)
+	for _, family := range connector.DefaultFamilies() {
+		require.NoError(t, familyReg.RegisterFamily(family))
+	}
+
 	// Create config loader
 	configLoader := config.NewLoader(tempDir)
 
@@ -342,7 +372,7 @@ func TestAssemblyIntegration_FailFastOnMissingConfig(t *testing.T) {
 	legacyReg := registry.NewModuleRegistry()
 
 	// Create resolver
-	resolver := runner.NewResolver(configLoader, typedReg, legacyReg)
+	resolver := runner.NewResolver(configLoader, typedReg, familyReg, legacyReg)
 
 	// Attempt to resolve infra module - should fail because config is missing
 	ctx := context.Background()
@@ -382,6 +412,12 @@ connectors:
 	// Create typed connector registry
 	typedReg := connector.NewTypedConnectorRegistry()
 
+	// Create family registry
+	familyReg := connector.NewFamilyRegistry(typedReg)
+	for _, family := range connector.DefaultFamilies() {
+		require.NoError(t, familyReg.RegisterFamily(family))
+	}
+
 	// Create config loader
 	configLoader := config.NewLoader(tempDir)
 
@@ -389,7 +425,7 @@ connectors:
 	legacyReg := registry.NewModuleRegistry()
 
 	// Create resolver
-	resolver := runner.NewResolver(configLoader, typedReg, legacyReg)
+	resolver := runner.NewResolver(configLoader, typedReg, familyReg, legacyReg)
 
 	// Attempt to resolve infra module - should fail due to invalid config
 	ctx := context.Background()

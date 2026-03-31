@@ -10,7 +10,7 @@ vars:
 # Development connector implementations (local/mock connectors)
 connectors:
   families:
-    git: file
+    git: gitea
     crossplane: crossplaneMock
-    policy: pmock
-    webhook: wmock
+    policy: embedded
+    webhook: webhook

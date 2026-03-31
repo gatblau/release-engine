@@ -64,22 +64,13 @@ func (m *mockConnectorRegistry) RegisterFamily(family connector.ConnectorFamily)
 	return args.Error(0)
 }
 
-func (m *mockConnectorRegistry) BindImplementation(familyName, connectorKey string) error {
-	args := m.Called(familyName, connectorKey)
-	return args.Error(0)
-}
-
-func (m *mockConnectorRegistry) Resolve(familyName string) (connector.Connector, error) {
-	args := m.Called(familyName)
+// Resolve returns a connector for a family using the specified implementation key.
+func (m *mockConnectorRegistry) Resolve(family, implKey string) (connector.Connector, error) {
+	args := m.Called(family, implKey)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(connector.Connector), args.Error(1)
-}
-
-func (m *mockConnectorRegistry) ValidateBindings() error {
-	args := m.Called()
-	return args.Error(0)
 }
 
 func (m *mockConnectorRegistry) GetFamilies() map[string]connector.ConnectorFamily {
@@ -88,14 +79,6 @@ func (m *mockConnectorRegistry) GetFamilies() map[string]connector.ConnectorFami
 		return nil
 	}
 	return args.Get(0).(map[string]connector.ConnectorFamily)
-}
-
-func (m *mockConnectorRegistry) GetBindings() map[string]string {
-	args := m.Called()
-	if args.Get(0) == nil {
-		return nil
-	}
-	return args.Get(0).(map[string]string)
 }
 
 func TestWaitForApprovalRequiresBeginStep(t *testing.T) {

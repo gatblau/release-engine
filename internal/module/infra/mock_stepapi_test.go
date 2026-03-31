@@ -108,6 +108,10 @@ func (m *MockStepAPI) CallConnector(ctx context.Context, req stepapi.ConnectorRe
 	}, nil
 }
 
+func (m *MockStepAPI) ResolveSecret(ctx context.Context, tenantID, key string) (string, error) {
+	return "", nil
+}
+
 func (m *MockStepAPI) WaitForApproval(ctx context.Context, req stepapi.ApprovalRequest) (stepapi.ApprovalOutcome, error) {
 	if m.approvalResult != nil {
 		return *m.approvalResult, nil
@@ -181,7 +185,6 @@ func TestModule_Phase2_HappyPath(t *testing.T) {
 
 	require.NoError(t, err)
 
-	// Verify steps were called in order
 	expectedSteps := []string{
 		"infra.render",
 		"infra.policy_evaluate",
@@ -312,7 +315,6 @@ func TestModule_Phase2_IdempotentCommit(t *testing.T) {
 
 	require.NoError(t, err)
 
-	// Verify steps - should skip health polling when changed == false
 	expectedSteps := []string{
 		"infra.render",
 		"infra.policy_evaluate",

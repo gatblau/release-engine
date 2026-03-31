@@ -390,11 +390,22 @@ func delete_file(ctx, client, params):
 #### `create_branch`
 > Creates a new branch from a given base ref. Used in release preparation, feature scaffolding, and automated change workflows.
 
+**Note:** GitHub and Gitea use different URL shapes for single ref lookups:
+- GitHub: `/repos/{owner}/{repo}/git/ref/heads/{ref}`
+- Gitea: `/repos/{owner}/{repo}/git/refs/heads/{ref}`
+
+The connector implements automatic fallback: try GitHub's path first; if 404, retry with Gitea's path.
+
 ```
 func create_branch(ctx, client, params):
   // params: org, name, branch, base_ref
 
-  base     = client.GET("/repos/{params.org}/{params.name}/git/ref/heads/{params.base_ref}")
+  // GitHub path first; if 404, fallback to Gitea path
+  base = client.GET("/repos/{params.org}/{params.name}/git/ref/heads/{params.base_ref}")
+  if base.status == 404:
+    base = client.GET("/repos/{params.org}/{params.name}/git/refs/heads/{params.base_ref}")
+  if base.status >= 400:
+    return TerminalError(base.error)
   base_sha = base.body.object.sha
 
   resp = client.POST("/repos/{params.org}/{params.name}/git/refs", {

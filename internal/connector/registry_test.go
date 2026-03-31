@@ -59,17 +59,17 @@ func TestTypedConnectorRegistry_ResolveGit(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "git connector not found")
 
-	// Test resolving wrong type connector - trying to resolve "policy" as git
-	// when only a policy connector (other-policy) exists
-	baseOther, err := NewBaseConnector(ConnectorTypeOther, "policy")
+	// Test resolving wrong type connector - trying to resolve "embedded" as git
+	// when only a policy connector (other-embedded) exists
+	baseOther, err := NewBaseConnector(ConnectorTypeOther, "embedded")
 	require.NoError(t, err)
 	otherConn := &mockConnector{BaseConnector: baseOther}
 	require.NoError(t, reg.Register(otherConn))
 
-	// Try to resolve "policy" as git connector (should fail with not found)
-	_, err = reg.ResolveGit("policy")
+	// Try to resolve "embedded" as git connector (should fail with not found)
+	_, err = reg.ResolveGit("embedded")
 	require.Error(t, err)
-	// Should fail because "git-policy" doesn't exist (we have "other-policy")
+	// Should fail because "git-embedded" doesn't exist (we have "other-embedded")
 	assert.Contains(t, err.Error(), "git connector not found")
 }
 
@@ -77,15 +77,15 @@ func TestTypedConnectorRegistry_ResolvePolicy(t *testing.T) {
 	reg := NewTypedConnectorRegistry()
 
 	// Create a policy connector (ConnectorTypeOther)
-	base, err := NewBaseConnector(ConnectorTypeOther, "policy")
+	base, err := NewBaseConnector(ConnectorTypeOther, "embedded")
 	require.NoError(t, err)
 	conn := &mockConnector{BaseConnector: base}
 
 	// Register the connector
 	require.NoError(t, reg.Register(conn))
 
-	// Test resolving by name "policy" (should map to "other-policy")
-	policyConn, err := reg.ResolvePolicy("policy")
+	// Test resolving by name "embedded" (should map to "embedded")
+	policyConn, err := reg.ResolvePolicy("embedded")
 	require.NoError(t, err)
 	assert.Equal(t, conn.Key(), policyConn.Key())
 

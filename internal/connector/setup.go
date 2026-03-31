@@ -8,43 +8,18 @@ import (
 )
 
 // SetupFamilyRegistry creates and configures a complete family registry.
-// It registers default families, loads configuration, applies bindings, and validates.
+// In the new design, connector resolution happens per-module at assembly time,
+// so this function only registers the families with their valid members.
+// Configuration is applied by each module's config file (connectors.families map).
 func SetupFamilyRegistry(concreteRegistry ConnectorRegistry, configPath string) (FamilyRegistry, error) {
 	// Create family registry
 	familyReg := NewFamilyRegistry(concreteRegistry)
 
-	// Register default families
+	// Register default families with their valid members
 	for _, family := range DefaultFamilies() {
 		if err := familyReg.RegisterFamily(family); err != nil {
 			return nil, fmt.Errorf("failed to register family %s: %w", family.Name, err)
 		}
-	}
-
-	// Load configuration
-	config, err := LoadFamilyConfig(configPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load family config: %w", err)
-	}
-
-	// Also load from environment (env vars take precedence)
-	envConfig, err := LoadFamilyConfigFromEnv()
-	if err != nil {
-		return nil, fmt.Errorf("failed to load family config from env: %w", err)
-	}
-
-	// Merge configs (environment overrides file)
-	for family, connectorKey := range envConfig.Families {
-		config.Families[family] = connectorKey
-	}
-
-	// Apply bindings
-	if err := config.ApplyBindings(familyReg); err != nil {
-		return nil, fmt.Errorf("failed to apply family bindings: %w", err)
-	}
-
-	// Validate bindings
-	if err := familyReg.ValidateBindings(); err != nil {
-		return nil, fmt.Errorf("family binding validation failed: %w", err)
 	}
 
 	return familyReg, nil

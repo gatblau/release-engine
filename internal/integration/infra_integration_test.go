@@ -36,7 +36,7 @@ func TestInfraIntegration_FullLifecycleAndCrossplaneValidation(t *testing.T) {
 	// Create minimal mocks that return success
 	mockPolicy := &connectortesting.MockConnector{
 		BaseConnector: func() connector.BaseConnector {
-			base, _ := connector.NewBaseConnector(connector.ConnectorTypeOther, "policy")
+			base, _ := connector.NewBaseConnector(connector.ConnectorTypePolicy, "pmock")
 			return base
 		}(),
 		ExecuteFunc: func(ctx context.Context, operation string, input map[string]interface{}, secrets map[string][]byte) (*connector.ConnectorResult, error) {
@@ -54,7 +54,7 @@ func TestInfraIntegration_FullLifecycleAndCrossplaneValidation(t *testing.T) {
 
 	mockWebhook := &connectortesting.MockConnector{
 		BaseConnector: func() connector.BaseConnector {
-			base, _ := connector.NewBaseConnector(connector.ConnectorTypeOther, "webhook")
+			base, _ := connector.NewBaseConnector(connector.ConnectorTypeWebHook, "webhook")
 			return base
 		}(),
 		ExecuteFunc: func(ctx context.Context, operation string, input map[string]interface{}, secrets map[string][]byte) (*connector.ConnectorResult, error) {
@@ -193,7 +193,7 @@ func TestInfraIntegration_IdempotencyOnRetry(t *testing.T) {
 	// Add mock policy and webhook connectors
 	mockPolicy := &connectortesting.MockConnector{
 		BaseConnector: func() connector.BaseConnector {
-			base, _ := connector.NewBaseConnector(connector.ConnectorTypeOther, "policy")
+			base, _ := connector.NewBaseConnector(connector.ConnectorTypePolicy, "pmock")
 			return base
 		}(),
 		ExecuteFunc: func(ctx context.Context, operation string, input map[string]interface{}, secrets map[string][]byte) (*connector.ConnectorResult, error) {
@@ -211,7 +211,7 @@ func TestInfraIntegration_IdempotencyOnRetry(t *testing.T) {
 
 	mockWebhook := &connectortesting.MockConnector{
 		BaseConnector: func() connector.BaseConnector {
-			base, _ := connector.NewBaseConnector(connector.ConnectorTypeOther, "webhook")
+			base, _ := connector.NewBaseConnector(connector.ConnectorTypeWebHook, "webhook")
 			return base
 		}(),
 		ExecuteFunc: func(ctx context.Context, operation string, input map[string]interface{}, secrets map[string][]byte) (*connector.ConnectorResult, error) {
@@ -315,7 +315,7 @@ func TestInfraIntegration_DataProcTemplate(t *testing.T) {
 	// Add mock policy and webhook connectors
 	mockPolicy := &connectortesting.MockConnector{
 		BaseConnector: func() connector.BaseConnector {
-			base, _ := connector.NewBaseConnector(connector.ConnectorTypeOther, "policy")
+			base, _ := connector.NewBaseConnector(connector.ConnectorTypePolicy, "pmock")
 			return base
 		}(),
 		ExecuteFunc: func(ctx context.Context, operation string, input map[string]interface{}, secrets map[string][]byte) (*connector.ConnectorResult, error) {
@@ -333,7 +333,7 @@ func TestInfraIntegration_DataProcTemplate(t *testing.T) {
 
 	mockWebhook := &connectortesting.MockConnector{
 		BaseConnector: func() connector.BaseConnector {
-			base, _ := connector.NewBaseConnector(connector.ConnectorTypeOther, "webhook")
+			base, _ := connector.NewBaseConnector(connector.ConnectorTypeWebHook, "webhook")
 			return base
 		}(),
 		ExecuteFunc: func(ctx context.Context, operation string, input map[string]interface{}, secrets map[string][]byte) (*connector.ConnectorResult, error) {
@@ -428,7 +428,7 @@ func TestInfraIntegration_VMAppTemplate(t *testing.T) {
 	// Add mock policy and webhook connectors
 	mockPolicy := &connectortesting.MockConnector{
 		BaseConnector: func() connector.BaseConnector {
-			base, _ := connector.NewBaseConnector(connector.ConnectorTypeOther, "policy")
+			base, _ := connector.NewBaseConnector(connector.ConnectorTypePolicy, "pmock")
 			return base
 		}(),
 		ExecuteFunc: func(ctx context.Context, operation string, input map[string]interface{}, secrets map[string][]byte) (*connector.ConnectorResult, error) {
@@ -446,7 +446,7 @@ func TestInfraIntegration_VMAppTemplate(t *testing.T) {
 
 	mockWebhook := &connectortesting.MockConnector{
 		BaseConnector: func() connector.BaseConnector {
-			base, _ := connector.NewBaseConnector(connector.ConnectorTypeOther, "webhook")
+			base, _ := connector.NewBaseConnector(connector.ConnectorTypeWebHook, "webhook")
 			return base
 		}(),
 		ExecuteFunc: func(ctx context.Context, operation string, input map[string]interface{}, secrets map[string][]byte) (*connector.ConnectorResult, error) {

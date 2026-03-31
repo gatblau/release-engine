@@ -99,24 +99,21 @@ func LoadFamilyConfigFromEnv() (*FamilyConfig, error) {
 	return config, nil
 }
 
-// ApplyBindings applies the configuration bindings to a FamilyRegistry.
+// NOTE: ApplyBindings is deprecated. The new design uses per-module resolution
+// via FamilyRegistry.Resolve(family, implKey) at module assembly time.
+// This function is kept for backward compatibility with any legacy code.
 func (c *FamilyConfig) ApplyBindings(registry FamilyRegistry) error {
-	for familyName, connectorKey := range c.Families {
-		if familyName == "" || connectorKey == "" {
-			continue
-		}
-		if err := registry.BindImplementation(familyName, connectorKey); err != nil {
-			return fmt.Errorf("failed to bind family %s to %s: %w", familyName, connectorKey, err)
-		}
-	}
+	// In the new design, bindings are resolved per-module, not globally.
+	// This function is a no-op in the new architecture.
 	return nil
 }
 
-// DefaultFamilies returns the default family contracts based on plan.md.
+// DefaultFamilies returns the default family contracts with their valid members.
 func DefaultFamilies() []ConnectorFamily {
 	return []ConnectorFamily{
 		{
-			Name: "git",
+			Name:    "git",
+			Members: []string{"git-github", "git-gitea", "git-file"},
 			Operations: map[string]OperationContract{
 				"commit_files": {
 					RequiredInputFields: []string{
@@ -147,7 +144,8 @@ func DefaultFamilies() []ConnectorFamily {
 			},
 		},
 		{
-			Name: "policy",
+			Name:    "policy",
+			Members: []string{"policy-embedded", "policy-pmock", "policy-opa"},
 			Operations: map[string]OperationContract{
 				"evaluate": {
 					RequiredInputFields: []string{
@@ -162,7 +160,8 @@ func DefaultFamilies() []ConnectorFamily {
 			},
 		},
 		{
-			Name: "webhook",
+			Name:    "webhook",
+			Members: []string{"webhook-webhook", "webhook-wmock", "webhook-http"},
 			Operations: map[string]OperationContract{
 				"post_callback": {
 					RequiredInputFields: []string{
@@ -174,6 +173,21 @@ func DefaultFamilies() []ConnectorFamily {
 					RequiredOutputFields: []string{
 						"status_code",
 						"response_body",
+					},
+				},
+			},
+		},
+		{
+			Name:    "infra",
+			Members: []string{"infra-crossplane", "infra-crossplaneMock"},
+			Operations: map[string]OperationContract{
+				"apply": {
+					RequiredInputFields: []string{
+						"manifest",
+					},
+					RequiredOutputFields: []string{
+						"applied",
+						"status",
 					},
 				},
 			},

@@ -16,7 +16,7 @@ func TestHTTPServer_Healthz(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
 	// Create a mock module registry for testing
 	reg := registry.NewModuleRegistry()
-	srv := NewServer(8080, logger, reg)
+	srv := NewServer(8080, logger, reg, "https://issuer.example.com", "release-engine")
 	srv.RegisterRoutes()
 
 	// Direct access to Echo instance to test handler
@@ -41,7 +41,7 @@ func TestHTTPServer_ShutdownGraceful(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
 	// Create a mock module registry for testing
 	reg := registry.NewModuleRegistry()
-	srv := NewServer(0, logger, reg)
+	srv := NewServer(0, logger, reg, "https://issuer.example.com", "release-engine")
 	srv.RegisterRoutes()
 
 	// Start server in a goroutine

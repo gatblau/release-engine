@@ -5,8 +5,11 @@ package webhook
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/gatblau/release-engine/internal/connector"
@@ -23,7 +26,7 @@ type WebhookConnector struct {
 
 // NewWebhookConnector creates a new webhook connector.
 func NewWebhookConnector(cfg connector.ConnectorConfig) (*WebhookConnector, error) {
-	base, err := connector.NewBaseConnector(connector.ConnectorTypeOther, "webhook")
+	base, err := connector.NewBaseConnector(connector.ConnectorTypeWebHook, "webhook")
 	if err != nil {
 		return nil, err
 	}
@@ -57,16 +60,16 @@ func (c *WebhookConnector) Validate(operation string, input map[string]interface
 		}
 	}
 
-	// headers must be a map[string]string
-	if headers, ok := input["headers"].(map[string]interface{}); ok {
-		// Validate each header value is string
-		for k, v := range headers {
-			if _, ok := v.(string); !ok {
-				return fmt.Errorf("header value for %s must be a string", k)
+	if _, ok := input["headers"].(map[string]string); !ok {
+		if headers, ok := input["headers"].(map[string]interface{}); ok {
+			for k, v := range headers {
+				if _, ok := v.(string); !ok {
+					return fmt.Errorf("header value for %s must be a string", k)
+				}
 			}
+		} else {
+			return fmt.Errorf("headers must be a map[string]string")
 		}
-	} else {
-		return fmt.Errorf("headers must be a map[string]string")
 	}
 
 	// body can be any object
@@ -101,16 +104,35 @@ func (c *WebhookConnector) Execute(ctx context.Context, operation string, input 
 
 // postCallback performs HTTP POST to the callback URL.
 func (c *WebhookConnector) postCallback(ctx context.Context, input map[string]interface{}) (*connector.ConnectorResult, error) {
-	// This is a base implementation that returns a successful response.
-	// HTTPWebhookConnector will override this behavior for actual HTTP calls.
-	// MockWebhookConnector will override for testing.
-	return &connector.ConnectorResult{
-		Status: connector.StatusSuccess,
-		Output: map[string]interface{}{
-			"status_code":   200,
-			"response_body": "{\"status\":\"success\"}",
-		},
-	}, nil
+	url, _ := input["url"].(string)
+	if strings.TrimSpace(url) == "" {
+		return nil, fmt.Errorf("url is required")
+	}
+	bodyBytes, err := json.Marshal(input["body"])
+	if err != nil {
+		return nil, fmt.Errorf("marshal body: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(string(bodyBytes)))
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if headers, ok := input["headers"].(map[string]string); ok {
+		for k, v := range headers {
+			req.Header.Set(k, v)
+		}
+	} else if headers, ok := input["headers"].(map[string]interface{}); ok {
+		for k, v := range headers {
+			req.Header.Set(k, fmt.Sprint(v))
+		}
+	}
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	respBody, _ := io.ReadAll(resp.Body)
+	return &connector.ConnectorResult{Status: connector.StatusSuccess, Output: map[string]interface{}{"status_code": resp.StatusCode, "response_body": string(respBody)}}, nil
 }
 
 // Close closes the connector.

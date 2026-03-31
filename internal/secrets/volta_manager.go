@@ -139,6 +139,8 @@ type Manager struct {
 	vm                  volta.VaultManagerService
 	secretsManager      SecretsManagerClient
 	vaultManagerFactory VaultManagerFactory
+	passphrase          string
+	passphraseEnvVar    string
 }
 
 // NewManager creates a new Volta Manager.
@@ -226,6 +228,7 @@ func (m *Manager) Init(ctx context.Context) error {
 	if passphraseEnvVar == "" {
 		passphraseEnvVar = "VOLTA_MASTER_PASSPHRASE" // #nosec G101 - This is a configuration key (env var name), not an actual secret value
 	}
+	m.passphraseEnvVar = passphraseEnvVar
 
 	// Check if passphrase is provided via environment variable (preferred for production)
 	passphrase := os.Getenv(passphraseEnvVar)
@@ -242,6 +245,7 @@ func (m *Manager) Init(ctx context.Context) error {
 			return fmt.Errorf("failed to set passphrase env var: %w", err)
 		}
 	}
+	m.passphrase = passphrase
 
 	// Get vault for each tenant to initialize them with the passphrase
 	// In a multi-tenant setup, we would iterate over tenant IDs
@@ -279,6 +283,11 @@ func (m *Manager) GetVault(ctx context.Context, tenantID string) (VaultService, 
 	v, err := m.vm.GetVault(tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("tenant vault unavailable: %w", err)
+	}
+	if m.passphrase != "" && m.passphraseEnvVar != "" {
+		if err := os.Setenv(m.passphraseEnvVar, m.passphrase); err != nil {
+			return nil, fmt.Errorf("failed to re-arm passphrase env var: %w", err)
+		}
 	}
 
 	m.vaults[tenantID] = v

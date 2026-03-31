@@ -390,6 +390,20 @@ func (s *ApprovalService) DrainEvents() []ApprovalEvent {
 	return events
 }
 
+func (s *ApprovalService) EnsureTerminal(jobID, stepID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	step, exists := s.steps[stepMapKey(jobID, stepID)]
+	if !exists {
+		return false
+	}
+	if step.status == "waiting_approval" {
+		step.status = "running"
+		return true
+	}
+	return step.status == "running" || step.status == "succeeded" || step.status == "failed" || step.status == "jobs_exhausted"
+}
+
 func (s *ApprovalService) SubmitDecision(_ context.Context, input DecisionInput) (DecisionOutput, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

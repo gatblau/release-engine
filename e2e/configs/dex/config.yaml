@@ -1,0 +1,44 @@
+issuer: http://dex:5556/dex
+
+storage:
+  type: memory
+
+web:
+  http: 0.0.0.0:5556
+
+telemetry:
+  http: 0.0.0.0:5558
+
+oauth2:
+  passwordConnector: local
+  responseTypes: ["code", "token", "id_token"]
+  skipApprovalScreen: true
+  grantTypes:
+    - "authorization_code"
+    - "password"
+    - "refresh_token"
+
+staticClients:
+  - id: release-engine
+    redirectURIs:
+      - http://localhost:8080/oauth/callback
+    name: 'Release Engine'
+    secret: example-secret
+    public: false
+    grantTypes:
+      - "authorization_code"
+      - "refresh_token"
+      - "password"
+
+enablePasswordDB: true
+
+staticPasswords:
+  - email: "test-user@example.com"
+    hash: "$2a$10$pm7ZksED7Zcmul6QppdQnOO7havemZwtbKlQLN3Jn3yTHw6c3zn82" # password: "password"
+    username: "test-user"
+    userID: "08a8684b-db88-4b73-90a9-3cd1661f5466"
+    groups:
+      - "users"
+      - "test-group"
+      - "tenant-admin"
+      - "platform-admin"

@@ -19,6 +19,7 @@ import (
 	"github.com/gatblau/release-engine/internal/registry"
 	"github.com/gatblau/release-engine/internal/runner"
 	"github.com/gatblau/release-engine/internal/scheduler"
+	"github.com/gatblau/release-engine/internal/secrets"
 	"github.com/gatblau/release-engine/internal/stepapi"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
@@ -106,7 +107,8 @@ func NewIntegrationTestHarness(t *testing.T) *IntegrationTestHarness {
 		steps: make(map[string]*testStep),
 	}
 
-	roller := runner.NewRunnerService(pool, familyReg, testStepAPI, h.ModuleReg)
+	// Create a dummy secrets manager for testing - use nil since vault manager is optional for testing
+	roller := runner.NewRunnerService(pool, familyReg, nil, testStepAPI, h.ModuleReg)
 	leaseMgr := scheduler.NewLeaseManager(pool)
 	svc := scheduler.NewSchedulerService(pool, h.ModuleReg, leaseMgr, 25*time.Millisecond, roller)
 	h.Runner = roller
@@ -276,6 +278,20 @@ func (t *testStepAPI) WaitForApproval(ctx context.Context, req stepapi.ApprovalR
 	}, nil
 }
 
+func (t *testStepAPI) ResolveSecret(ctx context.Context, tenantID, key string) (string, error) {
+	fmt.Printf("[TEST StepAPI] ResolveSecret: tenant=%s, key=%s (job: %s)\n", tenantID, key, t.jobID)
+	// Delegate to real adapter if it exists
+	if t.real != nil {
+		return t.real.ResolveSecret(ctx, tenantID, key)
+	}
+	// Fallback: create adapter with current job context (should not happen if SetJobContext was called)
+	if t.jobID == "" || t.runID == "" || t.attempt == 0 {
+		return "", fmt.Errorf("testStepAPI not initialized with job context")
+	}
+	adapter := runner.NewStepAPIAdapter(t.pool, t.familyRegistry, t.jobID, t.runID, t.attempt)
+	return adapter.ResolveSecret(ctx, tenantID, key)
+}
+
 // setupMinio creates MinIO for vault/backing-store emulation and wires AWS-style env vars.
 func (h *IntegrationTestHarness) setupMinio(ctx context.Context) testcontainers.Container {
 	container, err := minio.RunContainer(ctx,
@@ -326,8 +342,11 @@ func (h *IntegrationTestHarness) RegisterConnector(conn connector.Connector) {
 }
 
 // BindFamily binds a connector to a family in the family registry.
+// This is a no-op in the new design because family membership is defined
+// when the family is registered via DefaultFamilies().
 func (h *IntegrationTestHarness) BindFamily(familyName string, connectorKey string) {
-	require.NoError(h, h.FamilyReg.BindImplementation(familyName, connectorKey))
+	// No-op: family membership is defined in family registration
+	// The connector must already be registered in the connector registry
 }
 
 // RegisterModule exposes the module registry.
@@ -506,4 +525,27 @@ func (h *IntegrationTestHarness) AutoApproveWaitingSteps(jobID string) {
 		// No rows found, nothing to approve
 		return
 	}
+}
+
+// dummySecretsManager implements secrets.Manager for testing
+type dummySecretsManager struct{}
+
+func (d *dummySecretsManager) Init(ctx context.Context) error {
+	return nil
+}
+
+func (d *dummySecretsManager) fetchPassphrase(ctx context.Context) (string, error) {
+	return "test-passphrase", nil
+}
+
+func (d *dummySecretsManager) GetVault(ctx context.Context, tenantID string) (secrets.VaultService, error) {
+	return nil, nil
+}
+
+func (d *dummySecretsManager) CloseAll(ctx context.Context) error {
+	return nil
+}
+
+func (d *dummySecretsManager) GetVaultManager() interface{} {
+	return nil
 }

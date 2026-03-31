@@ -13,5 +13,5 @@ connectors:
   families:
     git: file
     crossplane: crossplaneMock
-    policy: pmock
+    policy: embedded
     webhook: wmock

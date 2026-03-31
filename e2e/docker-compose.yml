@@ -1,0 +1,189 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: release_engine
+      POSTGRES_PASSWORD: release_engine
+      POSTGRES_DB: release_engine
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./configs/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U release_engine"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  pgbouncer:
+    image: edoburu/pgbouncer:latest
+    environment:
+      DB_USER: release_engine
+      DB_PASSWORD: release_engine
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: release_engine
+      POOL_MODE: transaction
+      MAX_CLIENT_CONN: 100
+      DEFAULT_POOL_SIZE: 20
+    ports:
+      - "6432:6432"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./configs/pgbouncer/pgbouncer.ini:/etc/pgbouncer/pgbouncer.ini
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "localhost", "-p", "6432", "-U", "release_engine"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+      - ./configs/minio/init.sh:/docker-entrypoint-initdb.d/init.sh
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  gitea:
+    image: gitea/gitea:1.21
+    environment:
+      GITEA__database__DB_TYPE: postgres
+      GITEA__database__HOST: postgres:5432
+      GITEA__database__NAME: gitea
+      GITEA__database__USER: release_engine
+      GITEA__database__PASSWD: release_engine
+      GITEA__server__ROOT_URL: http://localhost:3000
+      GITEA__server__HTTP_PORT: 3000
+      GITEA__server__DOMAIN: localhost
+      GITEA__server__SSH_DOMAIN: localhost
+      GITEA__server__SSH_PORT: 2222
+      GITEA__server__DISABLE_SSH: "false"
+      GITEA__service__DISABLE_REGISTRATION: "true"
+    ports:
+      - "3000:3000"
+      - "2222:22"
+    volumes:
+      - gitea_data:/data
+      - ./configs/gitea/app.ini:/data/gitea/conf/app.ini
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  dex:
+    image: ghcr.io/dexidp/dex:v2.38.0
+    ports:
+      - "5556:5556"
+    volumes:
+      - ./configs/dex/config.yaml:/etc/dex/config.yaml
+    command: ["dex", "serve", "/etc/dex/config.yaml"]
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "http://localhost:5556/dex/.well-known/openid-configuration"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  release-engine:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgres://release_engine:release_engine@pgbouncer:6432/release_engine?sslmode=disable
+      HTTP_PORT: 8080
+      LOG_LEVEL: debug
+      OIDC_ISSUER_URL: http://dex:5556/dex
+      OIDC_AUDIENCE: release-engine
+      CFG_ROOT: /etc/release-engine/config/dev
+      DORA_PROMETHEUS_ENABLED: "true"
+      VOLTA_ENV: dev
+      VOLTA_STORAGE: file
+      VOLTA_FILE_PATH: /tmp/volta/vaults
+      VOLTA_SM_SECRET_ID: release-engine/volta-master-passphrase
+      VOLTA_S3_BUCKET: volta-secrets
+      VOLTA_MASTER_PASSPHRASE: dev-secure-passphrase
+      ADMIN_TOKEN: e2e-admin-token
+      RE_ALLOW_PRIVATE_CALLBACKS: "true"
+      GIT_CONNECTOR_BASE_URL: http://gitea:3000/api/v1/
+      GITEA_CONNECTOR_BASE_URL: http://gitea:3000/api/v1/
+      RUNNER_POLL_INTERVAL: 200ms
+    ports:
+      - "8080:8080"
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      dex:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "release-engine", "db", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  callback-sink:
+    image: python:3.12-alpine
+    command:
+      - sh
+      - -c
+      - |
+          cat >/tmp/callback_sink.py <<'PY'
+          import json
+          from http.server import BaseHTTPRequestHandler, HTTPServer
+
+          last_payload = None
+
+          class H(BaseHTTPRequestHandler):
+              def do_POST(self):
+                  global last_payload
+                  length = int(self.headers.get('Content-Length', '0'))
+                  body = self.rfile.read(length)
+                  try:
+                      last_payload = json.loads(body.decode('utf-8'))
+                  except Exception:
+                      pass
+                  self.send_response(200)
+                  self.send_header('Content-Type', 'application/json')
+                  self.end_headers()
+                  self.wfile.write(b'{"status":"ok"}')
+
+              def do_GET(self):
+                  self.send_response(200)
+                  self.send_header('Content-Type', 'application/json')
+                  self.end_headers()
+                  if last_payload is None:
+                      self.wfile.write(b'{}')
+                  else:
+                      self.wfile.write(json.dumps(last_payload).encode('utf-8'))
+
+              def log_message(self, format, *args):
+                  return
+
+          HTTPServer(('0.0.0.0', 9090), H).serve_forever()
+          PY
+          python /tmp/callback_sink.py
+    ports:
+      - "9090:9090"
+
+volumes:
+  postgres_data:
+  minio_data:
+  gitea_data:

@@ -29,7 +29,7 @@ type ResourceReference struct {
 }
 
 // pollHealthStatus polls the health status via git.read_file reading ArgoCD-written status file
-func pollHealthStatus(ctx context.Context, step stepAPI, repo, branch, commitSHA string, healthTimeout, pollInterval time.Duration) (*HealthStatus, error) {
+func pollHealthStatus(ctx context.Context, step stepAPI, repo, branch, commitSHA string, healthTimeout, pollInterval time.Duration, gitImplKey string) (*HealthStatus, error) {
 	startTime := time.Now()
 	statusFilePath := ".status.yaml" // ArgoCD writes this file
 	pollCount := 0
@@ -73,6 +73,7 @@ func pollHealthStatus(ctx context.Context, step stepAPI, repo, branch, commitSHA
 		// Read status file via git connector
 		connectorReq, err := MapToConnectorRequest(map[string]any{
 			"connector": "git",
+			"impl_key":  gitImplKey,
 			"operation": "read_file",
 			"input": map[string]any{
 				"repo":   repo,
@@ -217,7 +218,7 @@ func parseStatusFileSimple(content string, expectedCommitSHA string) (*HealthSta
 }
 
 // checkHealth performs a health check using the Query() method internally
-func checkHealth(ctx context.Context, step stepAPI, repo, branch, commitSHA string) (*HealthStatus, error) {
+func checkHealth(ctx context.Context, step stepAPI, repo, branch, commitSHA string, gitImplKey string) (*HealthStatus, error) {
 	logger := step.Logger()
 	if logger == nil {
 		logger = zap.NewNop()
@@ -231,16 +232,17 @@ func checkHealth(ctx context.Context, step stepAPI, repo, branch, commitSHA stri
 	// For now, use the original pollHealthStatus
 	// In production, we could switch to pollHealthStatusParallel
 	// but for tests, we need to use the original method
-	return pollHealthStatus(ctx, step, repo, branch, commitSHA, 30*time.Second, 500*time.Millisecond)
+	return pollHealthStatus(ctx, step, repo, branch, commitSHA, 30*time.Second, 500*time.Millisecond, gitImplKey)
 }
 
 // remediationRecommit performs remediation by recommitting manifests with force-sync annotation
-func remediationRecommit(ctx context.Context, step stepAPI, repo, branch, pathPrefix string, files map[string]any, message string) (string, error) {
+func remediationRecommit(ctx context.Context, step stepAPI, repo, branch, pathPrefix string, files map[string]any, message string, gitImplKey string) (string, error) {
 	// Add force-sync annotation to message
 	forceSyncMessage := fmt.Sprintf("%s [force-sync]", message)
 
 	connectorReq, err := MapToConnectorRequest(map[string]any{
 		"connector": "git",
+		"impl_key":  gitImplKey,
 		"operation": "commit_files",
 		"input": map[string]any{
 			"repo":            repo,

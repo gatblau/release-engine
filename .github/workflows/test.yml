@@ -100,6 +100,12 @@ jobs:
         run: make test-infra-integration
         continue-on-error: true
 
+      - name: Run E2E tests
+        id: e2e
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: make test-e2e COVER=1
+        continue-on-error: true
+
       - name: Update badge data
         if: github.ref == 'refs/heads/main' && github.event_name == 'push' && always()
         run: |
@@ -163,7 +169,8 @@ jobs:
           if [ "${{ steps.lint.outcome }}" == "failure" ] || \
              [ "${{ steps.security.outcome }}" == "failure" ] || \
              [ "${{ steps.tests.outcome }}" == "failure" ] || \
-             [ "${{ steps.infra_integration.outcome }}" == "failure" ]; then
+             [ "${{ steps.infra_integration.outcome }}" == "failure" ] || \
+             [ "${{ steps.e2e.outcome }}" == "failure" ]; then
             echo "One or more checks failed"
             exit 1
           fi

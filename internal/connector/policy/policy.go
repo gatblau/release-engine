@@ -21,7 +21,7 @@ type PolicyConnector struct {
 
 // NewPolicyConnector creates a new policy connector.
 func NewPolicyConnector(cfg connector.ConnectorConfig) (*PolicyConnector, error) {
-	base, err := connector.NewBaseConnector(connector.ConnectorTypeOther, "policy")
+	base, err := connector.NewBaseConnector(connector.ConnectorTypePolicy, "embedded")
 	if err != nil {
 		return nil, err
 	}

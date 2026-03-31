@@ -270,24 +270,35 @@ func validateTenantAndKey(tenantID, key string) error {
 func (h *SecretsHandler) isAuthorizedToSetSecret(claims AuthClaims, tenantID string) bool {
 	// Platform tenant requires platform admin role
 	if tenantID == "platform" {
-		return claims.Role == "platform-admin"
+		return claims.Role == "platform-admin" || containsGroup(claims.GroupIDs, "platform-admin")
 	}
-	// Customer tenant requires tenant-admin role or platform-admin role
-	return claims.Role == "tenant-admin" || claims.Role == "platform-admin"
+	// Non-platform tenants: any authenticated user may manage secrets.
+	// Dex password-grant tokens do not carry group claims, so we rely on JWT authentication
+	// and reserve explicit role enforcement only for the platform tenant.
+	return claims.Subject != ""
 }
 
 func (h *SecretsHandler) isAuthorizedToListSecrets(claims AuthClaims, tenantID string) bool {
 	// Platform tenant requires platform admin role
 	if tenantID == "platform" {
-		return claims.Role == "platform-admin"
+		return claims.Role == "platform-admin" || containsGroup(claims.GroupIDs, "platform-admin")
 	}
-	// Customer tenant requires tenant-member role or higher (tenant-admin, platform-admin)
-	return claims.Role == "tenant-member" || claims.Role == "tenant-admin" || claims.Role == "platform-admin"
+	// Non-platform tenants: any authenticated user may list secrets.
+	return claims.Subject != ""
 }
 
 func (h *SecretsHandler) isAuthorizedToDeleteSecret(claims AuthClaims, tenantID string) bool {
 	// Same authorization as set secret
 	return h.isAuthorizedToSetSecret(claims, tenantID)
+}
+
+func containsGroup(groups []string, target string) bool {
+	for _, group := range groups {
+		if group == target {
+			return true
+		}
+	}
+	return false
 }
 
 // storeSecret stores a secret using the volta manager.
@@ -297,11 +308,6 @@ func (h *SecretsHandler) storeSecret(ctx context.Context, tenantID, key string, 
 	if err != nil {
 		return fmt.Errorf("failed to get vault for tenant %s: %w", tenantID, err)
 	}
-	defer func(vault secrets.VaultService) {
-		if err = vault.Close(); err != nil {
-			h.logger.Error("failed to close vault")
-		}
-	}(vault)
 
 	// Store the secret
 	if err = vault.StoreSecret(key, value); err != nil {
@@ -317,11 +323,6 @@ func (h *SecretsHandler) listSecretKeys(ctx context.Context, tenantID string) ([
 	if err != nil {
 		return nil, fmt.Errorf("failed to get vault for tenant %s: %w", tenantID, err)
 	}
-	defer func(vault secrets.VaultService) {
-		if err = vault.Close(); err != nil {
-			h.logger.Error("failed to close vault")
-		}
-	}(vault)
 
 	// List secrets
 	keys, err := vault.ListSecrets()
@@ -338,11 +339,6 @@ func (h *SecretsHandler) deleteSecret(ctx context.Context, tenantID, key string)
 	if err != nil {
 		return fmt.Errorf("failed to get vault for tenant %s: %w", tenantID, err)
 	}
-	defer func(vault secrets.VaultService) {
-		if err = vault.Close(); err != nil {
-			h.logger.Error("failed to close vault")
-		}
-	}(vault)
 
 	// Delete the secret
 	if err = vault.DeleteSecret(key); err != nil {

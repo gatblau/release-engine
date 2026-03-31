@@ -17,13 +17,15 @@ import (
 type Factory struct {
 	configLoader config.Loader
 	connRegistry connector.TypedConnectorRegistry
+	familyReg    connector.FamilyRegistry
 }
 
 // NewFactory creates a new module factory.
-func NewFactory(configLoader config.Loader, connRegistry connector.TypedConnectorRegistry) *Factory {
+func NewFactory(configLoader config.Loader, connRegistry connector.TypedConnectorRegistry, familyReg connector.FamilyRegistry) *Factory {
 	return &Factory{
 		configLoader: configLoader,
 		connRegistry: connRegistry,
+		familyReg:    familyReg,
 	}
 }
 
@@ -56,35 +58,54 @@ func (f *Factory) assembleInfraModule(ctx context.Context, rawConfig *config.Mod
 
 	// 4. Validate required connector families are present (handled by ParseConfig)
 
-	// 5. Resolve selected connector implementations from registry
-	gitConn, err := f.connRegistry.ResolveGit(typedConfig.Connectors.Git)
+	// 5. Resolve selected connector implementations using per-module FamilyRegistry.Resolve()
+	// Git connector with type assertion
+	gitConn, err := f.familyReg.Resolve("git", typedConfig.Connectors.Git)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve git connector %s: %w", typedConfig.Connectors.Git, err)
 	}
+	gitTyped, ok := gitConn.(connector.GitConnector)
+	if !ok {
+		return nil, fmt.Errorf("connector %s does not implement GitConnector interface", typedConfig.Connectors.Git)
+	}
 
-	// Crossplane connectors use the generic Connector interface
+	// Policy connector with type assertion
+	policyConn, err := f.familyReg.Resolve("policy", typedConfig.Connectors.Policy)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve policy connector %s: %w", typedConfig.Connectors.Policy, err)
+	}
+	policyTyped, ok := policyConn.(connector.PolicyConnector)
+	if !ok {
+		return nil, fmt.Errorf("connector %s does not implement PolicyConnector interface", typedConfig.Connectors.Policy)
+	}
+
+	// Webhook connector with type assertion
+	webhookConn, err := f.familyReg.Resolve("webhook", typedConfig.Connectors.Webhook)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve webhook connector %s: %w", typedConfig.Connectors.Webhook, err)
+	}
+	webhookTyped, ok := webhookConn.(connector.WebhookConnector)
+	if !ok {
+		return nil, fmt.Errorf("connector %s does not implement WebhookConnector interface", typedConfig.Connectors.Webhook)
+	}
+
+	// Crossplane connector - resolves to generic Connector interface
 	// Crossplane connectors are registered with "infra-" prefix (ConnectorTypeInfra)
 	crossplaneKey := typedConfig.Connectors.Crossplane
 	if !isPrefixedWithInfra(crossplaneKey) {
 		crossplaneKey = "infra-" + crossplaneKey
 	}
-	crossplaneConn, ok := f.connRegistry.Lookup(crossplaneKey)
-	if !ok {
-		return nil, fmt.Errorf("failed to resolve crossplane connector %s (looked up as %s): not found", typedConfig.Connectors.Crossplane, crossplaneKey)
-	}
-
-	policyConn, err := f.connRegistry.ResolvePolicy(typedConfig.Connectors.Policy)
+	crossplaneConn, err := f.familyReg.Resolve("crossplane", crossplaneKey)
 	if err != nil {
-		return nil, fmt.Errorf("failed to resolve policy connector %s: %w", typedConfig.Connectors.Policy, err)
-	}
-
-	webhookConn, err := f.connRegistry.ResolveWebhook(typedConfig.Connectors.Webhook)
-	if err != nil {
-		return nil, fmt.Errorf("failed to resolve webhook connector %s: %w", typedConfig.Connectors.Webhook, err)
+		// Fallback: try without infra- prefix if the family resolution failed
+		crossplaneConn, err = f.familyReg.Resolve("infra", typedConfig.Connectors.Crossplane)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve infra connector %s: %w", typedConfig.Connectors.Crossplane, err)
+		}
 	}
 
 	// 6. Call module constructor with typed config and typed connectors
-	module, err := infra.NewModule(typedConfig.Vars, gitConn, crossplaneConn, policyConn, webhookConn)
+	module, err := infra.NewModule(typedConfig.Vars, gitTyped, crossplaneConn, policyTyped, webhookTyped)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create infra module: %w", err)
 	}

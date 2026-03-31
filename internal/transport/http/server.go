@@ -8,7 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"strconv"
+	"strings"
 
+	"github.com/gatblau/release-engine/internal/db"
 	"github.com/gatblau/release-engine/internal/registry"
 	"github.com/gatblau/release-engine/internal/secrets"
 	"github.com/labstack/echo/v4"
@@ -24,15 +28,20 @@ type Server interface {
 }
 
 type server struct {
-	e              *echo.Echo
-	logger         *zap.Logger
-	port           int
-	secretsHandler *SecretsHandler
-	moduleRegistry registry.ModuleRegistry
+	e                     *echo.Echo
+	logger                *zap.Logger
+	port                  int
+	pool                  db.Pool
+	secretsHandler        *SecretsHandler
+	moduleRegistry        registry.ModuleRegistry
+	oidcIssuer            string
+	oidcAudience          string
+	adminToken            string
+	allowPrivateCallbacks bool
 }
 
 // NewServer creates a new HTTP server.
-func NewServer(port int, logger *zap.Logger, moduleRegistry registry.ModuleRegistry) Server {
+func NewServer(port int, logger *zap.Logger, moduleRegistry registry.ModuleRegistry, oidcIssuer, oidcAudience string) Server {
 	e := echo.New()
 	e.HideBanner = true
 	e.Use(middleware.Recover())
@@ -47,15 +56,34 @@ func NewServer(port int, logger *zap.Logger, moduleRegistry registry.ModuleRegis
 	}))
 
 	return &server{
-		e:              e,
-		logger:         logger,
-		port:           port,
-		moduleRegistry: moduleRegistry,
+		e:                     e,
+		logger:                logger,
+		port:                  port,
+		pool:                  nil,
+		moduleRegistry:        moduleRegistry,
+		oidcIssuer:            oidcIssuer,
+		oidcAudience:          oidcAudience,
+		allowPrivateCallbacks: parseBoolEnv("RE_ALLOW_PRIVATE_CALLBACKS"),
 	}
 }
 
 // NewServerWithSecrets creates a new HTTP server with secrets management support.
-func NewServerWithSecrets(port int, logger *zap.Logger, voltaManager *secrets.Manager, moduleRegistry registry.ModuleRegistry) Server {
+func resolveAdminToken() string {
+	if token := os.Getenv("ADMIN_TOKEN"); token != "" {
+		return token
+	}
+	if secretID := os.Getenv("ADMIN_TOKEN_SM_SECRET_ID"); secretID != "" {
+		// Fallback to AWS secret if an env token is not provided.
+		// This keeps prod secure while allowing e2e to inject a plain env token.
+		if strings.TrimSpace(secretID) != "" {
+			// TODO: hook up AWS Secrets Manager when the secrets client abstraction is available here.
+			return ""
+		}
+	}
+	return ""
+}
+
+func NewServerWithSecrets(port int, logger *zap.Logger, pool db.Pool, voltaManager *secrets.Manager, moduleRegistry registry.ModuleRegistry, oidcIssuer, oidcAudience string) Server {
 	e := echo.New()
 	e.HideBanner = true
 	e.Use(middleware.Recover())
@@ -70,16 +98,21 @@ func NewServerWithSecrets(port int, logger *zap.Logger, voltaManager *secrets.Ma
 	}))
 
 	return &server{
-		e:              e,
-		logger:         logger,
-		port:           port,
-		secretsHandler: NewSecretsHandler(voltaManager, logger),
-		moduleRegistry: moduleRegistry,
+		e:                     e,
+		logger:                logger,
+		port:                  port,
+		pool:                  pool,
+		secretsHandler:        NewSecretsHandler(voltaManager, logger),
+		moduleRegistry:        moduleRegistry,
+		oidcIssuer:            oidcIssuer,
+		oidcAudience:          oidcAudience,
+		adminToken:            resolveAdminToken(),
+		allowPrivateCallbacks: parseBoolEnv("RE_ALLOW_PRIVATE_CALLBACKS"),
 	}
 }
 
 func (s *server) RegisterRoutes() {
-	jobHandler := NewJobHandler()
+	jobHandler := newJobHandler(s.pool, NewApprovalService(NewPolicyEngine()), s.allowPrivateCallbacks)
 	doraHandler := NewDoraHandler(nil)
 
 	// Create query handler if module registry is available
@@ -101,7 +134,7 @@ func (s *server) RegisterRoutes() {
 	rateLimiterRefill := 100.0
 
 	api := s.e.Group("/v1",
-		NewAuthMiddleware("https://issuer.example.com", "release-engine", s.logger),
+		NewAuthMiddleware(s.oidcIssuer, s.oidcAudience, s.logger),
 		NewRateLimiterMiddleware(rateLimiterConfig, rateLimiterRefill, s.logger),
 	)
 	api.POST("/jobs", jobHandler.CreateJob)
@@ -121,6 +154,22 @@ func (s *server) RegisterRoutes() {
 	api.PUT("/tenants/:tenant/secrets/:key", s.secretsHandler.SetSecret)
 	api.GET("/tenants/:tenant/secrets", s.secretsHandler.ListSecrets)
 	api.DELETE("/tenants/:tenant/secrets/:key", s.secretsHandler.DeleteSecret)
+	if s.adminToken != "" {
+		s.e.PUT("/internal/v1/platform/secrets/:key", func(c echo.Context) error {
+			if !strings.HasPrefix(c.Request().Header.Get("Authorization"), "Bearer "+s.adminToken) {
+				return c.JSON(http.StatusUnauthorized, ErrorResponse{Error: "unauthorized", Code: "AUTH_REQUIRED"})
+			}
+			key := c.Param("key")
+			var req SetSecretRequest
+			if err := c.Bind(&req); err != nil || req.Value == "" {
+				return c.JSON(http.StatusBadRequest, ErrorResponse{Error: "invalid request body", Code: "INVALID_REQUEST"})
+			}
+			if err := s.secretsHandler.storeSecret(c.Request().Context(), "platform", key, []byte(req.Value)); err != nil {
+				return c.JSON(http.StatusInternalServerError, ErrorResponse{Error: err.Error(), Code: "INTERNAL_ERROR"})
+			}
+			return c.JSON(http.StatusOK, SetSecretResponse{Key: key, TenantID: "platform", Status: "stored"})
+		})
+	}
 
 	// Query API (only if module registry is available)
 	if queryHandler != nil {
@@ -147,4 +196,10 @@ func (s *server) Shutdown(ctx context.Context) error {
 		return &HTTPError{Err: ErrHTTPShutdownTimeout, Code: "HTTP_SHUTDOWN_TIMEOUT", Detail: map[string]string{"error": err.Error()}}
 	}
 	return nil
+}
+
+func parseBoolEnv(key string) bool {
+	v := os.Getenv(key)
+	b, _ := strconv.ParseBool(v)
+	return b
 }

@@ -12,6 +12,7 @@ import (
 // MapToConnectorRequest converts a map-based request to a structured ConnectorRequest.
 func MapToConnectorRequest(m map[string]any) (stepapi.ConnectorRequest, error) {
 	connector, _ := m["connector"].(string)
+	implKey, _ := m["impl_key"].(string)
 	operation, _ := m["operation"].(string)
 	input, _ := m["input"].(map[string]any)
 
@@ -21,6 +22,7 @@ func MapToConnectorRequest(m map[string]any) (stepapi.ConnectorRequest, error) {
 
 	return stepapi.ConnectorRequest{
 		Connector: connector,
+		ImplKey:   implKey,
 		Operation: operation,
 		Input:     input,
 	}, nil

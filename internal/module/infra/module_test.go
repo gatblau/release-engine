@@ -108,6 +108,10 @@ func (m *mockStepAPI) Logger() *zap.Logger {
 	return zap.NewNop()
 }
 
+func (m *mockStepAPI) ResolveSecret(ctx context.Context, tenantID, key string) (string, error) {
+	return "", nil
+}
+
 func validParamsMap() map[string]any {
 	return map[string]any{
 		"contract_version":    "v1",

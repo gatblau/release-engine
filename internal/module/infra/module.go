@@ -11,6 +11,7 @@ import (
 
 	"github.com/gatblau/release-engine/internal/connector"
 	"github.com/gatblau/release-engine/internal/module/infra/template"
+	"github.com/gatblau/release-engine/internal/module/infra/template/catalog"
 	"github.com/gatblau/release-engine/internal/registry"
 	"github.com/gatblau/release-engine/internal/stepapi"
 	"go.uber.org/zap"
@@ -90,6 +91,25 @@ type Module struct {
 	policyConnector connector.PolicyConnector
 	// webhookConnector holds the injected webhook connector (optional).
 	webhookConnector connector.WebhookConnector
+}
+
+// GetConnectors returns the module's resolved connectors as a map keyed by family name.
+// This is used by the runner to build the StepAPI with pre-resolved connectors.
+func (m *Module) GetConnectors() map[string]connector.Connector {
+	connectors := make(map[string]connector.Connector)
+	if m.gitConnector != nil {
+		connectors["git"] = m.gitConnector
+	}
+	if m.crossplaneConnector != nil {
+		connectors["crossplane"] = m.crossplaneConnector
+	}
+	if m.policyConnector != nil {
+		connectors["policy"] = m.policyConnector
+	}
+	if m.webhookConnector != nil {
+		connectors["webhook"] = m.webhookConnector
+	}
+	return connectors
 }
 
 // NewLegacyModule creates a new Module with default constructor (legacy).
@@ -312,10 +332,12 @@ func (m *Module) Execute(ctx context.Context, api any, params map[string]any) er
 	// Phase 1: Policy Evaluation
 	if step != nil {
 		logger.Info("starting policy evaluation phase")
+		logger.Info("starting policy evaluation phase")
 		_ = step.BeginStep("infra.policy_evaluate")
 
 		policyReq, err := MapToConnectorRequest(map[string]any{
 			"connector": "policy",
+			"impl_key":  "policy-pmock",
 			"operation": "evaluate",
 			"input": map[string]any{
 				"policy_bundle": "infra/crossplane-xr",
@@ -341,6 +363,18 @@ func (m *Module) Execute(ctx context.Context, api any, params map[string]any) er
 		}
 
 		logger.Debug("policy connector result", zap.Any("result", policyResult))
+		// Check for connector error first
+		if policyResult.Error != nil {
+			logger.Error("policy connector returned error",
+				zap.String("code", policyResult.Error.Code),
+				zap.String("message", policyResult.Error.Message))
+			_ = step.EndStepErr("infra.policy_evaluate", "POLICY_CALL_FAILED",
+				fmt.Sprintf("Policy evaluation failed: %s - %s",
+					policyResult.Error.Code, policyResult.Error.Message))
+			return fmt.Errorf("policy evaluation failed: %s - %s",
+				policyResult.Error.Code, policyResult.Error.Message)
+		}
+
 		// Extract allowed from result
 		var allowed bool
 		if policyResult.Output != nil {
@@ -366,49 +400,58 @@ func (m *Module) Execute(ctx context.Context, api any, params map[string]any) er
 		})
 	}
 
-	// Phase 1: Approval Gate
+	// Phase 1: Approval Gate (only for catalogue items that require approval)
 	if step != nil {
-		logger.Info("starting approval gate phase")
-		_ = step.BeginStep("infra.approval_gate")
-
-		approvalReq, err := MapToApprovalRequest(map[string]any{
-			"summary":      fmt.Sprintf("Provision %s cluster in %s", decoded.CatalogueItem, decoded.Environment),
-			"detail":       fmt.Sprintf("Tenant: %s, Owner: %s, Region: %s", decoded.Tenant, decoded.Owner, decoded.PrimaryRegion),
-			"blast_radius": "production",
-			"policy_ref":   "infra/crossplane-xr",
-			"metadata": map[string]string{
-				"approval_ttl": "1h",
-				"tenant":       decoded.Tenant,
-			},
-		})
-		if err != nil {
-			logger.Error("failed to create approval request", zap.Error(err))
-			_ = step.EndStepErr("infra.approval_gate", "APPROVAL_REQUEST_INVALID", err.Error())
-			return fmt.Errorf("approval request invalid: %w", err)
+		catalogueItemRequiresApproval := false
+		if catalogDefs, err := catalog.LoadAll(); err == nil {
+			if cat, ok := catalogDefs[decoded.CatalogueItem]; ok {
+				catalogueItemRequiresApproval = cat.Constraints.RequiresApproval
+			}
 		}
+		if skip, _ := params["skip_approval_gate"].(bool); skip {
+			logger.Info("skipping approval gate due to request flag")
+		} else if catalogueItemRequiresApproval {
+			logger.Info("starting approval gate phase")
+			_ = step.BeginStep("infra.approval_gate")
 
-		logger.Debug("waiting for approval", zap.Any("request", approvalReq))
-		approvalResult, err := step.WaitForApproval(ctx, approvalReq)
-		if err != nil {
-			logger.Error("approval wait failed", zap.Error(err))
-			_ = step.EndStepErr("infra.approval_gate", "APPROVAL_FAILED", err.Error())
-			return fmt.Errorf("approval failed: %w", err)
+			approvalReq, err := MapToApprovalRequest(map[string]any{
+				"summary":      fmt.Sprintf("Provision %s cluster in %s", decoded.CatalogueItem, decoded.Environment),
+				"detail":       fmt.Sprintf("Tenant: %s, Owner: %s, Region: %s", decoded.Tenant, decoded.Owner, decoded.PrimaryRegion),
+				"blast_radius": "production",
+				"policy_ref":   "infra/crossplane-xr",
+				"metadata": map[string]string{
+					"approval_ttl": "1h",
+					"tenant":       decoded.Tenant,
+				},
+			})
+			if err != nil {
+				logger.Error("failed to create approval request", zap.Error(err))
+				_ = step.EndStepErr("infra.approval_gate", "APPROVAL_REQUEST_INVALID", err.Error())
+				return fmt.Errorf("approval request invalid: %w", err)
+			}
+
+			logger.Debug("waiting for approval", zap.Any("request", approvalReq))
+			approvalResult, err := step.WaitForApproval(ctx, approvalReq)
+			if err != nil {
+				logger.Error("approval wait failed", zap.Error(err))
+				_ = step.EndStepErr("infra.approval_gate", "APPROVAL_FAILED", err.Error())
+				return fmt.Errorf("approval failed: %w", err)
+			}
+
+			logger.Debug("approval result received", zap.Any("result", approvalResult))
+			if approvalResult.Decision != "approved" {
+				logger.Warn("approval rejected", zap.String("decision", approvalResult.Decision), zap.String("approver", approvalResult.Approver))
+				_ = step.EndStepErr("infra.approval_gate", "APPROVAL_REJECTED", fmt.Sprintf("Approval rejected: %v", approvalResult))
+				return fmt.Errorf("approval rejected: %v", approvalResult)
+			}
+
+			logger.Info("approval granted", zap.String("approver", approvalResult.Approver))
+			_ = step.EndStepOK("infra.approval_gate", map[string]any{
+				"decision": approvalResult.Decision,
+				"approver": approvalResult.Approver,
+			})
 		}
-
-		logger.Debug("approval result received", zap.Any("result", approvalResult))
-		if approvalResult.Decision != "approved" {
-			logger.Warn("approval rejected", zap.String("decision", approvalResult.Decision), zap.String("approver", approvalResult.Approver))
-			_ = step.EndStepErr("infra.approval_gate", "APPROVAL_REJECTED", fmt.Sprintf("Approval rejected: %v", approvalResult))
-			return fmt.Errorf("approval rejected: %v", approvalResult)
-		}
-
-		logger.Info("approval granted", zap.String("approver", approvalResult.Approver))
-		_ = step.EndStepOK("infra.approval_gate", map[string]any{
-			"decision": approvalResult.Decision,
-			"approver": approvalResult.Approver,
-		})
 	}
-
 	// After approval, continue to Phase 2 (Git commit, health verification, callback)
 	// For now, just succeed
 	if step != nil {
@@ -426,7 +469,7 @@ func (m *Module) Execute(ctx context.Context, api any, params map[string]any) er
 		logger.Info("starting git commit step")
 
 		// Get infra repo from params or context
-		infraRepo := params["infra_repo"].(string)
+		infraRepo, _ := params["infra_repo"].(string)
 		if infraRepo == "" {
 			infraRepo = "org/infra-manifests" // default
 		}
@@ -440,11 +483,12 @@ func (m *Module) Execute(ctx context.Context, api any, params map[string]any) er
 		logger.Debug("manifest prepared", zap.Int("file_count", len(manifestsMap)))
 
 		// Generate idempotency key from job context
-		idempotencyKey := params["idempotency_key"].(string)
+		idempotencyKey, _ := params["idempotency_key"].(string)
 		logger.Debug("using idempotency key", zap.String("idempotency_key", idempotencyKey))
 
 		commitReq, err := MapToConnectorRequest(map[string]any{
 			"connector": "git",
+			"impl_key":  "git-file",
 			"operation": "commit_files",
 			"input": map[string]any{
 				"repo":            infraRepo,
@@ -470,6 +514,29 @@ func (m *Module) Execute(ctx context.Context, api any, params map[string]any) er
 		}
 
 		logger.Debug("git connector result", zap.Any("result", commitResult))
+		if commitResult.Status != "success" {
+			errMsg := "git connector returned non-success status"
+			if commitResult.Error != nil {
+				errMsg = fmt.Sprintf("git connector error [%s]: %s", commitResult.Error.Code, commitResult.Error.Message)
+			}
+			logger.Error("git commit step failed",
+				zap.String("status", commitResult.Status),
+				zap.String("detail", errMsg))
+			_ = step.EndStepErr("infra.git_commit", "GIT_COMMIT_FAILED", errMsg)
+
+			// If the connector returns StatusTerminalError, propagate it as a TerminalError
+			// to signal unrecoverability to the runner (no retry)
+			if commitResult.Status == "terminal_error" {
+				return &stepapi.TerminalError{
+					Code:    commitResult.Error.Code,
+					Message: errMsg,
+				}
+			}
+
+			// For other statuses (e.g., "error"), return regular error
+			return fmt.Errorf("git commit failed: %s", errMsg)
+		}
+
 		// Extract commit SHA and changed flag
 		var commitSHA string
 		var changed = true // default
@@ -501,10 +568,11 @@ func (m *Module) Execute(ctx context.Context, api any, params map[string]any) er
 		if !changed {
 			// Step 4: Callback (skip health polling)
 			_ = step.BeginStep("infra.callback")
-			callbackURL := params["callback_url"].(string)
+			callbackURL, _ := params["callback_url"].(string)
 
 			callbackReq, err := MapToConnectorRequest(map[string]any{
 				"connector": "webhook",
+				"impl_key":  "webhook",
 				"operation": "post_callback",
 				"input": map[string]any{
 					"url":     callbackURL,
@@ -545,6 +613,51 @@ func (m *Module) Execute(ctx context.Context, api any, params map[string]any) er
 			return nil
 		}
 
+		if skip, _ := params["skip_health_check"].(bool); skip {
+			logger.Info("skipping health polling due to request flag")
+			healthStatus := &HealthStatus{Status: "healthy", Timestamp: time.Now().UTC()}
+			_ = step.EndStepOK("infra.health_poll", map[string]any{
+				"status":    healthStatus.Status,
+				"timestamp": healthStatus.Timestamp,
+			})
+			_ = step.BeginStep("infra.callback")
+			callbackURL, _ := params["callback_url"].(string)
+			callbackReq, err := MapToConnectorRequest(map[string]any{
+				"connector": "webhook",
+				"impl_key":  "webhook",
+				"operation": "post_callback",
+				"input": map[string]any{
+					"url":     callbackURL,
+					"headers": map[string]string{"Content-Type": "application/json"},
+					"body": map[string]any{
+						"job_id":        params["job_id"],
+						"status":        "succeeded",
+						"commit_sha":    commitSHA,
+						"resource_refs": []interface{}{},
+						"health_status": healthStatus.Status,
+					},
+					"idempotency_key": idempotencyKey,
+				},
+			})
+			if err != nil {
+				_ = step.EndStepErr("infra.callback", "CALLBACK_REQUEST_INVALID", err.Error())
+				return fmt.Errorf("callback request invalid: %w", err)
+			}
+			callbackResult, err := step.CallConnector(ctx, callbackReq)
+			if err != nil {
+				_ = step.EndStepErr("infra.callback", "CALLBACK_FAILED", err.Error())
+				return fmt.Errorf("callback failed: %w", err)
+			}
+			var statusCode interface{}
+			var responseBody interface{}
+			if callbackResult.Output != nil {
+				statusCode = callbackResult.Output["status_code"]
+				responseBody = callbackResult.Output["response_body"]
+			}
+			_ = step.EndStepOK("infra.callback", map[string]any{"status_code": statusCode, "response_body": responseBody})
+			return nil
+		}
+
 		// Step 2: Health polling
 		logger.Info("starting health polling",
 			zap.String("repo", infraRepo),
@@ -563,7 +676,7 @@ func (m *Module) Execute(ctx context.Context, api any, params map[string]any) er
 			zap.Duration("healthTimeout", healthTimeout),
 			zap.Duration("pollInterval", pollInterval))
 
-		healthStatus, err := checkHealth(ctx, step, infraRepo, "main", commitSHA)
+		healthStatus, err := checkHealth(ctx, step, infraRepo, "main", commitSHA, "git-file")
 		if err != nil {
 			logger.Error("health polling failed", zap.Error(err))
 			// Health timeout - trigger remediation
@@ -573,7 +686,7 @@ func (m *Module) Execute(ctx context.Context, api any, params map[string]any) er
 			// Try remediation (one retry max)
 			newCommitSHA, err := remediationRecommit(ctx, step, infraRepo, "main",
 				fmt.Sprintf("tenants/%s/%s/", decoded.Tenant, decoded.Environment),
-				manifestsMap, fmt.Sprintf("Provision %s cluster [remediation]", decoded.CatalogueItem))
+				manifestsMap, fmt.Sprintf("Provision %s cluster [remediation]", decoded.CatalogueItem), "git-file")
 
 			if err != nil {
 				logger.Error("remediation failed", zap.Error(err))
@@ -584,6 +697,7 @@ func (m *Module) Execute(ctx context.Context, api any, params map[string]any) er
 
 				callbackReq, err := MapToConnectorRequest(map[string]any{
 					"connector": "webhook",
+					"impl_key":  "webhook",
 					"operation": "post_callback",
 					"input": map[string]any{
 						"url":     callbackURL,
@@ -623,7 +737,7 @@ func (m *Module) Execute(ctx context.Context, api any, params map[string]any) er
 			logger.Info("remediation commit successful", zap.String("new_commit_sha", newCommitSHA))
 			// Retry health polling after remediation
 			logger.Info("retrying health polling after remediation")
-			healthStatus, err = checkHealth(ctx, step, infraRepo, "main", newCommitSHA)
+			healthStatus, err = checkHealth(ctx, step, infraRepo, "main", newCommitSHA, "git-file")
 			if err != nil {
 				// Second timeout → job FAILED
 				logger.Error("second health polling timeout after remediation", zap.Error(err))
@@ -634,6 +748,7 @@ func (m *Module) Execute(ctx context.Context, api any, params map[string]any) er
 
 				callbackReq, callbackErr := MapToConnectorRequest(map[string]any{
 					"connector": "webhook",
+					"impl_key":  "webhook",
 					"operation": "post_callback",
 					"input": map[string]any{
 						"url":     callbackURL,
@@ -695,11 +810,12 @@ func (m *Module) Execute(ctx context.Context, api any, params map[string]any) er
 		// Step 3: Callback
 		logger.Info("starting callback step")
 		_ = step.BeginStep("infra.callback")
-		callbackURL := params["callback_url"].(string)
+		callbackURL, _ := params["callback_url"].(string)
 		logger.Debug("callback URL", zap.String("callback_url", callbackURL))
 
 		callbackReq, err := MapToConnectorRequest(map[string]any{
 			"connector": "webhook",
+			"impl_key":  "webhook",
 			"operation": "post_callback",
 			"input": map[string]any{
 				"url":     callbackURL,

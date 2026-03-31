@@ -13,6 +13,10 @@ Release Engine is a durable, multi-tenant (modular-monolith) service designed to
 
 It provides idempotent job intake, policy-governed execution, connector-based integrations (e.g., GitHub/Backstage/AWS), and strong operational guarantees around retries, reconciliation, observability, and auditability.
 
+## Getting Started
+
+The fastest way to get started is to run the end to end integration tests as [explained here](e2e/README.md).
+
 ## Documentation
 
 ### Specifications

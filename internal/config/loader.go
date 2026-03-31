@@ -41,6 +41,10 @@ type Config struct {
 	VoltaS3Bucket         string
 	VoltaFilePath         string
 	VoltaPassphraseEnvVar string
+	AdminTokenSMSecretID  string
+	// Job execution and API timeouts
+	JobExecutionTimeout string
+	APIClientTimeout    string
 }
 
 // Loader loads and validates configuration.
@@ -131,6 +135,19 @@ func (l *loader) Load(ctx context.Context) (Config, error) {
 		voltaPassphraseEnvVar = "VOLTA_MASTER_PASSPHRASE" // #nosec G101 - This is a configuration key (env var name), not an actual secret value
 	}
 
+	adminTokenSMSecretID := os.Getenv("ADMIN_TOKEN_SM_SECRET_ID")
+
+	// Load job execution and API timeout configurations with defaults
+	jobExecutionTimeout := os.Getenv("JOB_EXECUTION_TIMEOUT")
+	if jobExecutionTimeout == "" {
+		jobExecutionTimeout = "45s" // Default 45 seconds for job completion
+	}
+
+	apiClientTimeout := os.Getenv("API_CLIENT_TIMEOUT")
+	if apiClientTimeout == "" {
+		apiClientTimeout = "30s" // Default 30 seconds for API calls
+	}
+
 	return Config{
 		HTTPPort:              httpPort,
 		DatabaseURL:           dbURL,
@@ -143,5 +160,8 @@ func (l *loader) Load(ctx context.Context) (Config, error) {
 		VoltaS3Bucket:         voltaS3Bucket,
 		VoltaFilePath:         voltaFilePath,
 		VoltaPassphraseEnvVar: voltaPassphraseEnvVar,
+		AdminTokenSMSecretID:  adminTokenSMSecretID,
+		JobExecutionTimeout:   jobExecutionTimeout,
+		APIClientTimeout:      apiClientTimeout,
 	}, nil
 }

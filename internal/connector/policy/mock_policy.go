@@ -24,7 +24,7 @@ type MockPolicyConnector struct {
 
 // NewMockPolicyConnector creates a new mock policy connector.
 func NewMockPolicyConnector(cfg connector.ConnectorConfig) (*MockPolicyConnector, error) {
-	base, err := connector.NewBaseConnector(connector.ConnectorTypeOther, "pmock")
+	base, err := connector.NewBaseConnector(connector.ConnectorTypePolicy, "pmock")
 	if err != nil {
 		return nil, err
 	}

@@ -17,19 +17,32 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 
 	// SchemaJobState creates the job_state enum type.
 	SchemaJobState = `
-CREATE TYPE job_state AS ENUM ('queued','running','succeeded','failed','jobs_exhausted','canceled');`
+DO $$ BEGIN
+    CREATE TYPE job_state AS ENUM ('queued','running','succeeded','failed','jobs_exhausted','canceled');
+EXCEPTION
+    WHEN duplicate_object THEN NULL;
+END $$;`
 
 	// SchemaOutboxKind creates the outbox_kind enum type.
 	SchemaOutboxKind = `
-CREATE TYPE outbox_kind AS ENUM ('webhook','event','internal');`
+DO $$ BEGIN
+    CREATE TYPE outbox_kind AS ENUM ('webhook','event','internal');
+EXCEPTION
+    WHEN duplicate_object THEN NULL;
+END $$;`
 
 	// SchemaEffectKind creates the effect_kind enum type.
 	SchemaEffectKind = `
-CREATE TYPE effect_kind AS ENUM ('connector_call');`
+DO $$ BEGIN
+    CREATE TYPE effect_kind AS ENUM ('connector_call');
+EXCEPTION
+    WHEN duplicate_object THEN NULL;
+END $$;`
 
 	// SchemaEffectStatus creates the effect_status enum type.
 	SchemaEffectStatus = `
-CREATE TYPE effect_status AS ENUM (
+DO $$ BEGIN
+    CREATE TYPE effect_status AS ENUM (
 	'pending',
 	'reserved',
 	'in_flight',
@@ -38,15 +51,26 @@ CREATE TYPE effect_status AS ENUM (
 	'canceled',
 	'unknown_outcome',
 	'dlq'
-);`
+    );
+EXCEPTION
+    WHEN duplicate_object THEN NULL;
+END $$;`
 
 	// SchemaStepStatus creates the step_status enum type.
 	SchemaStepStatus = `
-CREATE TYPE step_status AS ENUM ('ok', 'error', 'skipped', 'waiting_approval');`
+DO $$ BEGIN
+    CREATE TYPE step_status AS ENUM ('ok', 'error', 'skipped', 'waiting_approval');
+EXCEPTION
+    WHEN duplicate_object THEN NULL;
+END $$;`
 
 	// SchemaApprovalDecision creates the approval_decision enum type.
 	SchemaApprovalDecision = `
-CREATE TYPE approval_decision AS ENUM ('approved', 'rejected', 'expired');`
+DO $$ BEGIN
+    CREATE TYPE approval_decision AS ENUM ('approved', 'rejected', 'expired');
+EXCEPTION
+    WHEN duplicate_object THEN NULL;
+END $$;`
 
 	// SchemaJobs creates the jobs table.
 	// Based on design spec §12.1

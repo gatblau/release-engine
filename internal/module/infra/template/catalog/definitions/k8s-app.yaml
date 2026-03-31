@@ -29,7 +29,7 @@ constraints:
   allowed_availabilities: [standard, high, critical]
   allowed_residencies: [eu, us, ap, global]
   allowed_providers: [aws, azure]
-  requires_approval: false
+  requires_approval: true
   max_cost_monthly: 50000
 
 defaults:

@@ -12,5 +12,5 @@ connectors:
   families:
     git: github           # Real GitHub API for production repos
     crossplane: crossplane  # Production crossplane connector
-    policy: opa           # Production OPA policy service
+    policy: embedded           # Production policy service
     webhook: http         # Production webhook service with retries

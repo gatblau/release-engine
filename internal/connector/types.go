@@ -6,6 +6,7 @@ package connector
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"time"
 )
 
@@ -15,22 +16,26 @@ import (
 type ConnectorType string
 
 const (
-	ConnectorTypeGit    ConnectorType = "git"
-	ConnectorTypeCloud  ConnectorType = "cloud"
-	ConnectorTypeCD     ConnectorType = "cd"
-	ConnectorTypeInfra  ConnectorType = "infra"
-	ConnectorTypeDevOps ConnectorType = "devops"
-	ConnectorTypeOther  ConnectorType = "other"
+	ConnectorTypeGit     ConnectorType = "git"
+	ConnectorTypeCloud   ConnectorType = "cloud"
+	ConnectorTypeCD      ConnectorType = "cd"
+	ConnectorTypeInfra   ConnectorType = "infra"
+	ConnectorTypeDevOps  ConnectorType = "devops"
+	ConnectorTypePolicy  ConnectorType = "policy"
+	ConnectorTypeWebHook ConnectorType = "webhook"
+	ConnectorTypeOther   ConnectorType = "other"
 )
 
 // ValidConnectorTypes is the set of known types for registration validation.
 var ValidConnectorTypes = map[ConnectorType]bool{
-	ConnectorTypeGit:    true,
-	ConnectorTypeCloud:  true,
-	ConnectorTypeCD:     true,
-	ConnectorTypeInfra:  true,
-	ConnectorTypeDevOps: true,
-	ConnectorTypeOther:  true,
+	ConnectorTypeGit:     true,
+	ConnectorTypeCloud:   true,
+	ConnectorTypeCD:      true,
+	ConnectorTypeInfra:   true,
+	ConnectorTypeDevOps:  true,
+	ConnectorTypePolicy:  true,
+	ConnectorTypeOther:   true,
+	ConnectorTypeWebHook: true,
 }
 
 // --- Result Types ---
@@ -65,6 +70,7 @@ func (e *ConnectorError) Error() string {
 type ConnectorConfig struct {
 	HTTPTimeout      time.Duration
 	TransportRetries int
+	HTTPClient       *http.Client
 	Extra            map[string]string
 }
 

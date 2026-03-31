@@ -20,8 +20,8 @@ type Resolver struct {
 }
 
 // NewResolver creates a new module resolver.
-func NewResolver(configLoader config.Loader, connRegistry connector.TypedConnectorRegistry, legacyRegistry registry.ModuleRegistry) *Resolver {
-	factory := module.NewFactory(configLoader, connRegistry)
+func NewResolver(configLoader config.Loader, connRegistry connector.TypedConnectorRegistry, familyReg connector.FamilyRegistry, legacyRegistry registry.ModuleRegistry) *Resolver {
+	factory := module.NewFactory(configLoader, connRegistry, familyReg)
 	return &Resolver{
 		factory:        factory,
 		legacyRegistry: legacyRegistry,

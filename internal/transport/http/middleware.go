@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -228,7 +229,10 @@ func (c *JWKSCache) GetKey(ctx context.Context, keyID string) (*rsa.PublicKey, e
 
 // refresh fetches the JWKS from the issuer and updates the cache.
 func (c *JWKSCache) refresh(ctx context.Context) error {
-	jwksURL := strings.TrimSuffix(c.issuerURL, "/") + "/.well-known/jwks.json"
+	jwksURL, err := c.discoverJWKSURI(ctx)
+	if err != nil {
+		return err
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, jwksURL, nil)
 	if err != nil {
@@ -285,11 +289,54 @@ func (c *JWKSCache) refresh(ctx context.Context) error {
 
 	// Update cache
 	c.mu.Lock()
-	c.keys = newKeys
+	for kid, key := range newKeys {
+		c.keys[kid] = key
+	}
 	c.refreshAfter = time.Now().Add(5 * time.Minute)
 	c.mu.Unlock()
 
 	return nil
+}
+
+func (c *JWKSCache) discoverJWKSURI(ctx context.Context) (string, error) {
+	issuer := strings.TrimSuffix(c.issuerURL, "/")
+	configURL := issuer + "/.well-known/openid-configuration"
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, configURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create OIDC discovery request: %w", err)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch OIDC discovery document: %w", err)
+	}
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			c.logger.Warn("failed to close OIDC discovery response body", zap.Error(closeErr))
+		}
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("OIDC discovery endpoint returned status %d", resp.StatusCode)
+	}
+
+	var discovery struct {
+		JWKSURI string `json:"jwks_uri"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&discovery); err != nil {
+		return "", fmt.Errorf("failed to decode OIDC discovery document: %w", err)
+	}
+
+	if discovery.JWKSURI == "" {
+		return "", fmt.Errorf("OIDC discovery document missing jwks_uri")
+	}
+
+	if _, err := url.Parse(discovery.JWKSURI); err != nil {
+		return "", fmt.Errorf("invalid jwks_uri in discovery document: %w", err)
+	}
+
+	return discovery.JWKSURI, nil
 }
 
 // authMiddleware validates JWT bearer tokens.
@@ -391,7 +438,40 @@ func (m *authMiddleware) Process(next echo.HandlerFunc) echo.HandlerFunc {
 		)
 
 		if err != nil {
-			m.logger.Warn("authentication failed: token validation failed", zap.Error(err))
+			// Determine validation failure step
+			var validationStep string
+			errStr := err.Error()
+			switch {
+			case errors.Is(err, jwt.ErrTokenMalformed) || strings.Contains(errStr, "malformed"):
+				validationStep = "malformed"
+			case errors.Is(err, jwt.ErrTokenExpired) || strings.Contains(errStr, "expired"):
+				validationStep = "expiry"
+			case errors.Is(err, jwt.ErrTokenNotValidYet) || strings.Contains(errStr, "not valid yet"):
+				validationStep = "not_valid_yet"
+			case errors.Is(err, jwt.ErrTokenInvalidIssuer) || strings.Contains(errStr, "issuer"):
+				validationStep = "issuer"
+			case errors.Is(err, jwt.ErrTokenInvalidAudience) || strings.Contains(errStr, "audience"):
+				validationStep = "audience"
+			case errors.Is(err, jwt.ErrTokenInvalidClaims) || strings.Contains(errStr, "claims"):
+				validationStep = "claims"
+			case strings.Contains(errStr, "signature"):
+				validationStep = "signature"
+			default:
+				validationStep = "unknown"
+			}
+
+			// Mask token for logging
+			maskedToken := maskToken(tokenString)
+
+			m.logger.Warn("JWT validation failed",
+				zap.Error(err),
+				zap.String("step", validationStep),
+				zap.String("kid", kid),
+				zap.String("masked_token", maskedToken),
+				zap.String("issuer", claimAsString(*claims, "iss")),
+				zap.String("audience", claimAsString(*claims, "aud")),
+				zap.Int64("expiry", claimAsInt64(*claims, "exp")),
+			)
 			return echo.NewHTTPError(http.StatusUnauthorized, ErrorResponse{
 				Error:   "invalid token",
 				Code:    "AUTH_INVALID",
@@ -414,7 +494,7 @@ func (m *authMiddleware) Process(next echo.HandlerFunc) echo.HandlerFunc {
 			TenantID:  claimAsString(*claims, "tenant_id"),
 			Role:      claimAsString(*claims, "role"),
 			BrandIDs:  claimAsStringSlice(*claims, "brand_ids"),
-			GroupIDs:  claimAsStringSlice(*claims, "group_ids"),
+			GroupIDs:  claimAsStringSlice(*claims, "groups"),
 			Issuer:    claimAsString(*claims, "iss"),
 			Audience:  claimAsString(*claims, "aud"),
 			ExpiresAt: claimAsInt64(*claims, "exp"),
@@ -427,9 +507,9 @@ func (m *authMiddleware) Process(next echo.HandlerFunc) echo.HandlerFunc {
 			c.Set(string(tenantIDKey), authClaims.TenantID)
 		}
 
-		m.logger.Debug("authentication successful",
-			zap.String("subject", authClaims.Subject),
-			zap.String("tenant_id", authClaims.TenantID))
+		//m.logger.Debug("authentication successful",
+		//	zap.String("subject", authClaims.Subject),
+		//	zap.String("tenant_id", authClaims.TenantID))
 
 		return next(c)
 	}
@@ -485,9 +565,9 @@ func (m *rateLimiterMiddleware) Process(next echo.HandlerFunc) echo.HandlerFunc 
 			})
 		}
 
-		m.logger.Debug("rate limit check passed",
-			zap.String("tenant_id", tenantStr),
-			zap.Float64("remaining", bucket.RemainingTokens()))
+		//m.logger.Debug("rate limit check passed",
+		//	zap.String("tenant_id", tenantStr),
+		//	zap.Float64("remaining", bucket.RemainingTokens()))
 
 		return next(c)
 	}
@@ -556,4 +636,12 @@ func claimAsInt64(claims jwt.MapClaims, key string) int64 {
 	default:
 		return 0
 	}
+}
+
+// maskToken masks a JWT token for logging (shows first 8 chars and last 4 chars)
+func maskToken(token string) string {
+	if len(token) <= 12 {
+		return "[REDACTED]"
+	}
+	return token[:8] + "..." + token[len(token)-4:]
 }

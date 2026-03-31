@@ -5,7 +5,9 @@ package github
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -28,8 +30,20 @@ func NewGitHubConnector(cfg connector.ConnectorConfig) (*GitHubConnector, error)
 		return nil, err
 	}
 	// Use explicit HTTP client to allow gock interception in tests if needed
-	httpClient := &http.Client{}
-	client := github.NewClient(httpClient)
+	httpClient := &http.Client{Timeout: cfg.HTTPTimeout}
+	cfg.HTTPClient = httpClient // Store for use in getGiteaRef fallback
+	baseURL := strings.TrimSpace(cfg.Extra["base_url"])
+	baseURL = strings.TrimRight(baseURL, "/")
+	var client *github.Client
+	if baseURL != "" {
+		client = github.NewClient(httpClient)
+		client, err = client.WithEnterpriseURLs(baseURL, baseURL)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		client = github.NewClient(httpClient)
+	}
 	return &GitHubConnector{
 		BaseConnector: base,
 		client:        client,
@@ -86,7 +100,7 @@ func (c *GitHubConnector) Validate(operation string, input map[string]interface{
 }
 
 func (c *GitHubConnector) RequiredSecrets(operation string) []string {
-	return []string{"github-token"}
+	return []string{"git-access-token"}
 }
 
 func (c *GitHubConnector) Execute(ctx context.Context, operation string, input map[string]interface{}, secrets map[string][]byte) (*connector.ConnectorResult, error) {
@@ -108,7 +122,7 @@ func (c *GitHubConnector) Execute(ctx context.Context, operation string, input m
 	}
 
 	// Check if we have the required token
-	token := secrets["github-token"]
+	token := secrets["git-access-token"]
 	if token == nil {
 		// For contract tests, if no token in secrets, use the client from constructor
 		// (which was created with "fake-token" in tests)
@@ -138,14 +152,19 @@ func (c *GitHubConnector) Execute(ctx context.Context, operation string, input m
 			Status: connector.StatusTerminalError,
 			Error: &connector.ConnectorError{
 				Code:    "MISSING_SECRET",
-				Message: "missing required secret: github-token",
+				Message: "missing required secret: git-access-token",
 			},
 		}, nil
 	}
 
-	// Create a client with the token for this execution
+	// Create a client with the token for this execution. Reuse the enterprise
+	// client when a base URL is configured so commit operations target Gitea.
 	httpClient := &http.Client{Timeout: c.config.HTTPTimeout}
-	client := github.NewClient(httpClient).WithAuthToken(string(token))
+	client := c.client
+	if client == nil {
+		client = github.NewClient(httpClient)
+	}
+	client = client.WithAuthToken(string(token))
 
 	switch operation {
 	case "create_repository":
@@ -296,17 +315,36 @@ func (c *GitHubConnector) commitFiles(ctx context.Context, client *github.Client
 	owner, repoName := parts[0], parts[1]
 
 	// Get the current commit SHA for the branch
-	ref, _, err := client.Git.GetRef(ctx, owner, repoName, "refs/heads/"+branch)
+	// Try GitHub's API path first; if 404, fall back to Gitea's path
+	ref, resp, err := client.Git.GetRef(ctx, owner, repoName, "refs/heads/"+branch)
+	var commitSHA string
 	if err != nil {
-		return &connector.ConnectorResult{
-			Status: connector.StatusTerminalError,
-			Error: &connector.ConnectorError{
-				Code:    "BRANCH_NOT_FOUND",
-				Message: fmt.Sprintf("branch %s not found: %v", branch, err),
-			},
-		}, nil
+		// Check if this is a 404 - could be Gitea using different URL structure
+		if resp != nil && resp.StatusCode == 404 {
+			// Try Gitea's API path: /repos/{owner}/{repo}/git/refs/heads/{branch}
+			giteaSHA, giteaErr := c.getGiteaRef(ctx, client, owner, repoName, branch)
+			if giteaErr != nil {
+				return &connector.ConnectorResult{
+					Status: connector.StatusTerminalError,
+					Error: &connector.ConnectorError{
+						Code:    "BRANCH_NOT_FOUND",
+						Message: fmt.Sprintf("branch %s not found: GitHub: %v, Gitea: %v", branch, err, giteaErr),
+					},
+				}, nil
+			}
+			commitSHA = giteaSHA
+		} else {
+			return &connector.ConnectorResult{
+				Status: connector.StatusTerminalError,
+				Error: &connector.ConnectorError{
+					Code:    "BRANCH_NOT_FOUND",
+					Message: fmt.Sprintf("branch %s not found: %v", branch, err),
+				},
+			}, nil
+		}
+	} else {
+		commitSHA = ref.GetObject().GetSHA()
 	}
-	commitSHA := ref.GetObject().GetSHA()
 
 	// Get the tree SHA for that commit
 	commit, _, err := client.Git.GetCommit(ctx, owner, repoName, commitSHA)
@@ -499,6 +537,53 @@ func splitRepo(repo string) []string {
 		return nil
 	}
 	return parts
+}
+
+// getGiteaRef fetches a branch reference using Gitea's API path format.
+// GitHub uses: /repos/{owner}/{repo}/git/ref/{ref}
+// Gitea uses: /repos/{owner}/{repo}/git/refs/{ref}
+// This method is called as a fallback when GitHub's path returns 404.
+func (c *GitHubConnector) getGiteaRef(ctx context.Context, client *github.Client, owner, repo, branch string) (string, error) {
+	// Use the client's base URL to construct the Gitea-compatible URL
+	baseURL := client.BaseURL.String()
+	apiURL := fmt.Sprintf("%srepos/%s/%s/git/refs/heads/%s", baseURL, owner, repo, branch)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
+	if err != nil {
+		return "", err
+	}
+
+	// Use the underlying HTTP client from the go-github client
+	httpClient := c.config.HTTPClient
+	if httpClient == nil {
+		httpClient = &http.Client{}
+	}
+	resp, err := httpClient.Do(req.WithContext(ctx))
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+	}
+
+	// Parse Gitea's response - it returns an array of refs
+	var refs []struct {
+		Object struct {
+			SHA string `json:"sha"`
+		} `json:"object"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&refs); err != nil {
+		return "", err
+	}
+
+	if len(refs) == 0 {
+		return "", fmt.Errorf("no refs returned")
+	}
+
+	return refs[0].Object.SHA, nil
 }
 
 func (c *GitHubConnector) Close() error {

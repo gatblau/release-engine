@@ -5,10 +5,26 @@ package stepapi
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"go.uber.org/zap"
 )
+
+// TerminalError is a sentinel error type that signals an unrecoverable failure.
+// When a module returns a TerminalError, the runner will immediately transition
+// the job to jobs_exhausted state without retrying.
+type TerminalError struct {
+	Code    string
+	Message string
+}
+
+func (e *TerminalError) Error() string {
+	if e.Code != "" {
+		return fmt.Sprintf("%s: %s", e.Code, e.Message)
+	}
+	return e.Message
+}
 
 // ApprovalOutcome defines the result of a human approval decision.
 type ApprovalOutcome struct {
@@ -28,8 +44,11 @@ type ApprovalRequest struct {
 }
 
 // ConnectorRequest is the connector invocation payload.
+// In the per-module design, Connector specifies the family name and ImplKey
+// specifies the implementation key within that family.
 type ConnectorRequest struct {
-	Connector string         `json:"connector"`
+	Connector string         `json:"connector"` // family name, e.g., "git"
+	ImplKey   string         `json:"impl_key"`  // implementation key, e.g., "git-github"
 	Operation string         `json:"operation"`
 	Input     map[string]any `json:"input"`
 }
@@ -51,6 +70,7 @@ type StepAPI interface {
 	EndStepOK(stepKey string, output map[string]any) error
 	EndStepErr(stepKey, code, msg string) error
 	CallConnector(ctx context.Context, req ConnectorRequest) (*ConnectorResult, error)
+	ResolveSecret(ctx context.Context, tenantID, key string) (string, error)
 	WaitForApproval(ctx context.Context, req ApprovalRequest) (ApprovalOutcome, error)
 	SetContext(key string, value any) error
 	GetContext(key string) (any, bool)

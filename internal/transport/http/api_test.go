@@ -183,6 +183,21 @@ func TestJobHandler_CreateJob_InvalidCallbackURL(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), "ERR_INVALID_CALLBACK_URL")
 }
 
+func TestJobHandler_CreateJob_CallbackURLLoopbackAllowed(t *testing.T) {
+	e := echo.New()
+	body := bytes.NewBufferString(`{"tenant_id":"acme-prod","path_key":"deploy-production","params":{},"idempotency_key":"idem-cb-allowed","callback_url":"http://127.0.0.1:49348/hook"}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/jobs", body)
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	h := NewJobHandlerWithPrivateCallbacksAllowed(true)
+	err := h.CreateJob(c)
+
+	assert.NoError(t, err)
+	assert.Equal(t, http.StatusAccepted, rec.Code)
+}
+
 func TestJobHandler_CreateJob_PayloadTooLarge(t *testing.T) {
 	e := echo.New()
 	large := make([]byte, 256*1024+1)

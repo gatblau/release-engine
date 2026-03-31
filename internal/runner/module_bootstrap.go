@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"fmt"
 	"os"
 
 	"github.com/gatblau/release-engine/internal/connector"
@@ -22,7 +23,7 @@ func NewDefaultModuleRegistry() (registry.ModuleRegistry, error) {
 
 // NewConfigAwareModuleResolver creates a module resolver that supports both
 // config-managed and legacy module assembly paths.
-func NewConfigAwareModuleResolver(connRegistry connector.TypedConnectorRegistry) (*Resolver, error) {
+func NewConfigAwareModuleResolver(connRegistry connector.TypedConnectorRegistry, familyReg connector.FamilyRegistry) (*Resolver, error) {
 	// Create config loader with default base path
 	defaultBasePath := "."
 	if cfgRoot := os.Getenv("CFG_ROOT"); cfgRoot != "" {
@@ -36,13 +37,13 @@ func NewConfigAwareModuleResolver(connRegistry connector.TypedConnectorRegistry)
 		return nil, err
 	}
 
-	return NewResolver(configLoader, connRegistry, legacyRegistry), nil
+	return NewResolver(configLoader, connRegistry, familyReg, legacyRegistry), nil
 }
 
 // BootstrapWithConfig loads and assembles modules using config-aware resolution.
 // This is the new entry point for framework bootstrap that supports config-managed modules.
-func BootstrapWithConfig(ctx context.Context, connRegistry connector.TypedConnectorRegistry) (registry.ModuleRegistry, error) {
-	resolver, err := NewConfigAwareModuleResolver(connRegistry)
+func BootstrapWithConfig(ctx context.Context, connRegistry connector.TypedConnectorRegistry, familyReg connector.FamilyRegistry) (registry.ModuleRegistry, error) {
+	resolver, err := NewConfigAwareModuleResolver(connRegistry, familyReg)
 	if err != nil {
 		return nil, err
 	}
@@ -71,6 +72,7 @@ func (r *dynamicModuleRegistry) Lookup(key, version string) (registry.Module, bo
 	// Try to resolve the module using the resolver
 	module, err := r.resolver.ResolveModule(context.Background(), key, version)
 	if err != nil {
+		fmt.Printf("[ERROR] failed to resolve module %s:%s: %v\n", key, version, err)
 		return nil, false
 	}
 

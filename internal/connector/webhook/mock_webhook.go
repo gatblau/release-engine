@@ -25,7 +25,7 @@ type MockWebhookConnector struct {
 
 // NewMockWebhookConnector creates a new mock webhook connector.
 func NewMockWebhookConnector(cfg connector.ConnectorConfig) (*MockWebhookConnector, error) {
-	base, err := connector.NewBaseConnector(connector.ConnectorTypeOther, "wmock")
+	base, err := connector.NewBaseConnector(connector.ConnectorTypeWebHook, "wmock")
 	if err != nil {
 		return nil, err
 	}
