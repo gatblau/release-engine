@@ -29,7 +29,15 @@ spec:
         region: eu-west-1
         securityGroupIds: []
         subnetIds: []
-        tags: {}
+        tags:
+            catalogue-item: data-proc
+            cost-centre: cost-center-456
+            data-classification: confidential
+            environment: production
+            managed-by: release-engine
+            owner: data-platform
+            service: data-pipeline-prod
+            tenant: analytics
         version: "1.30"
 ---
 apiVersion: infrastructure.platform.io/v1alpha1
@@ -56,6 +64,15 @@ spec:
         providerConfigRef: aws-provider
         queueCount: 4
         region: eu-west-1
+        tags:
+            catalogue-item: data-proc
+            cost-centre: cost-center-456
+            data-classification: confidential
+            environment: production
+            managed-by: release-engine
+            owner: data-platform
+            service: data-pipeline-prod
+            tenant: analytics
         topicCount: 2
 ---
 apiVersion: infrastructure.platform.io/v1alpha1
@@ -79,4 +96,13 @@ spec:
         providerConfigRef: aws-provider
         region: eu-west-1
         retentionDays: 0
+        tags:
+            catalogue-item: data-proc
+            cost-centre: cost-center-456
+            data-classification: confidential
+            environment: production
+            managed-by: release-engine
+            owner: data-platform
+            service: data-pipeline-prod
+            tenant: analytics
         versioning: true

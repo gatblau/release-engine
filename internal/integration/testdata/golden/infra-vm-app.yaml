@@ -28,7 +28,15 @@ spec:
         region: eu-west-1
         securityGroupIds: []
         subnetId: subnet-from-tier-private
-        tags: {}
+        tags:
+            catalogue-item: vm-app
+            cost-centre: cost-center-789
+            data-classification: internal
+            environment: production
+            managed-by: release-engine
+            owner: platform-ops
+            service: vm-legacy-prod
+            tenant: core-systems
         userData: ""
 ---
 apiVersion: infrastructure.platform.io/v1alpha1
@@ -59,3 +67,12 @@ spec:
         providerConfigRef: aws-provider
         publicSubnets: 3
         region: eu-west-1
+        tags:
+            catalogue-item: vm-app
+            cost-centre: cost-center-789
+            data-classification: internal
+            environment: production
+            managed-by: release-engine
+            owner: platform-ops
+            service: vm-legacy-prod
+            tenant: core-systems

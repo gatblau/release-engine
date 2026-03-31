@@ -29,5 +29,13 @@ spec:
         region: eu-west-1
         securityGroupIds: []
         subnetIds: []
-        tags: {}
+        tags:
+            catalogue-item: k8s-app
+            cost-centre: cost-center-123
+            data-classification: confidential
+            environment: production
+            managed-by: release-engine
+            owner: platform-team
+            service: checkout-prod
+            tenant: payments
         version: "1.30"
