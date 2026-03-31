@@ -70,14 +70,14 @@ func RunE2E(ctx context.Context, cfg E2EConfig) (*E2EResult, error) {
 		return nil, fmt.Errorf("failed to bootstrap Gitea: %w", err)
 	}
 	if pat == "" {
-		return nil, fmt.Errorf("Gitea bootstrap completed without returning a PAT")
+		return nil, fmt.Errorf("gitea bootstrap completed without returning a PAT")
 	}
-	fmt.Printf("   Gitea PAT obtained (length: %d chars)\n", len(pat))
+	fmt.Printf("   Gitea personal access token obtained (length: %d chars)\n", len(pat))
 
 	// Step 1b: Pre-flight check
 	fmt.Println("1b. Pre-flight check: verifying test-org/test-repo...")
 	if err := EnsureGiteaResources(ctx, cfg.GiteaURL, pat, cfg.AdminUser, cfg.AdminPassword); err != nil {
-		return nil, fmt.Errorf("Gitea pre-flight check failed: %w", err)
+		return nil, fmt.Errorf("gitea pre-flight check failed: %w", err)
 	}
 
 	// Step 2: Store PAT as secret via Release Engine API
@@ -141,7 +141,7 @@ func RunE2E(ctx context.Context, cfg E2EConfig) (*E2EResult, error) {
 
 	fmt.Println("   Verifying Git commit in Gitea...")
 	if err := verifyGitCommit(ctx, cfg.GiteaURL, "test-org/test-repo", pat, callbackPayload.CommitSHA); err != nil {
-		return nil, fmt.Errorf("Git commit verification failed: %w", err)
+		return nil, fmt.Errorf("git commit verification failed: %w", err)
 	}
 
 	fmt.Println("   Verifying secret usage (not bypassed)...")
@@ -335,7 +335,11 @@ func createJobViaAPI(ctx context.Context, baseURL, tenantID, pathKey, callbackUR
 	if err != nil {
 		return "", fmt.Errorf("execute request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func(Body io.ReadCloser) {
+		if err = Body.Close(); err != nil {
+			fmt.Printf("failed to close response body: %v", err)
+		}
+	}(resp.Body)
 
 	if resp.StatusCode != http.StatusAccepted {
 		var errResp struct {
@@ -456,7 +460,11 @@ func verifyJobStateInDatabase(ctx context.Context, jobID string) error {
 	if err != nil {
 		return fmt.Errorf("failed to connect to database: %w", err)
 	}
-	defer conn.Close(ctx)
+	defer func(conn *pgx.Conn, ctx context.Context) {
+		if err = conn.Close(ctx); err != nil {
+			fmt.Printf("failed to close database connection: %v\n", err)
+		}
+	}(conn, ctx)
 
 	var state string
 	var attempt int
@@ -535,7 +543,7 @@ func verifyCallbackReceived(ctx context.Context, callbackSinkURL, expectedJobID 
 			}
 
 			var payload CallbackPayload
-			if err := json.Unmarshal(body, &payload); err != nil {
+			if err = json.Unmarshal(body, &payload); err != nil {
 				fmt.Printf("   [callback-sink] failed to unmarshal payload: %s, retrying...\n", string(body))
 				continue
 			}
@@ -675,12 +683,16 @@ func fetchCurrentJobState(ctx context.Context, client *http.Client, baseURL, job
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func(Body io.ReadCloser) {
+		if err = Body.Close(); err != nil {
+			fmt.Printf("failed to close response body: %v", err)
+		}
+	}(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("unexpected status %d", resp.StatusCode)
 	}
 	var s JobState
-	if err := json.NewDecoder(resp.Body).Decode(&s); err != nil {
+	if err = json.NewDecoder(resp.Body).Decode(&s); err != nil {
 		return nil, err
 	}
 	return &s, nil
