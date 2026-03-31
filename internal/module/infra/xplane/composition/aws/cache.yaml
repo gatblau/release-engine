@@ -42,6 +42,10 @@ spec:
                 atRestEncryptionEnabled: true
                 transitEncryptionEnabled: true
                 snapshotRetentionLimit: {{ .observed.composite.resource.spec.parameters.snapshotRetentionDays }}
+                tags:
+                {{- with .observed.composite.resource.spec.parameters.tags }}
+                {{- toYaml . | nindent 16 }}
+                {{- end }}
                 {{- with .observed.composite.resource.spec.parameters.engineVersion }}
                 engineVersion: {{ . | quote }}
                 {{- end }}

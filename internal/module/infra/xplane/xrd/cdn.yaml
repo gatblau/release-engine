@@ -25,6 +25,11 @@ spec:
                   x-kubernetes-preserve-unknown-fields: true
                   required: [origins]
                   properties:
+                    tags:
+                      type: object
+                      additionalProperties:
+                        type: string
+                      description: "FinOps tags applied to all resources in this capability"
                     origins:
                       type: array
                       minItems: 1

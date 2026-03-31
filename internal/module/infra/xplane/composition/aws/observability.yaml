@@ -41,6 +41,10 @@ spec:
                 name: {{ $providerConfigRef }}
               forProvider:
                 region: {{ $region }}
+                tags:
+                {{- with $xr.spec.parameters.tags }}
+                {{- toYaml . | nindent 16 }}
+                {{- end }}
                 name: {{ $logGroupName }}
                 retentionInDays: {{ $logRetentionDays }}
 

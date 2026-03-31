@@ -21,54 +21,65 @@ spec:
             spec:
               type: object
               required:
-                - engine
+                - parameters
               properties:
-                region:
-                  type: string
-                  default: eu-west-1
-                providerConfigRef:
-                  type: string
-                  default: aws-provider
-                engine:
-                  type: string
-                  enum:
-                    - postgres
-                    - mysql
-                    - aurora-postgresql
-                    - aurora-mysql
-                engineVersion:
-                  type: string
-                instanceClass:
-                  type: string
-                  default: db.r6g.large
-                allocatedStorage:
-                  type: integer
-                  default: 100
-                storageType:
-                  type: string
-                  default: gp3
-                  enum:
-                    - gp3
-                    - io1
-                    - io2
-                iops:
-                  type: integer
-                multiAZ:
-                  type: boolean
-                  default: true
-                backupRetentionDays:
-                  type: integer
-                  default: 7
-                parameterGroup:
-                  type: string
-                maintenanceWindow:
-                  type: string
-                subnetGroupName:
-                  type: string
-                securityGroupIds:
-                  type: array
-                  items:
-                    type: string
+                parameters:
+                  type: object
+                  required:
+                    - engine
+                    - region
+                  properties:
+                    tags:
+                      type: object
+                      additionalProperties:
+                        type: string
+                      description: "FinOps tags applied to all resources in this capability"
+                    region:
+                      type: string
+                      default: eu-west-1
+                    providerConfigRef:
+                      type: string
+                      default: aws-provider
+                    engine:
+                      type: string
+                      enum:
+                        - postgres
+                        - mysql
+                        - aurora-postgresql
+                        - aurora-mysql
+                    engineVersion:
+                      type: string
+                    instanceClass:
+                      type: string
+                      default: db.r6g.large
+                    allocatedStorage:
+                      type: integer
+                      default: 100
+                    storageType:
+                      type: string
+                      default: gp3
+                      enum:
+                        - gp3
+                        - io1
+                        - io2
+                    iops:
+                      type: integer
+                    multiAZ:
+                      type: boolean
+                      default: true
+                    backupRetentionDays:
+                      type: integer
+                      default: 7
+                    parameterGroup:
+                      type: string
+                    maintenanceWindow:
+                      type: string
+                    subnetGroupName:
+                      type: string
+                    securityGroupIds:
+                      type: array
+                      items:
+                        type: string
             status:
               type: object
               properties:

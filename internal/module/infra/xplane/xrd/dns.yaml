@@ -27,6 +27,11 @@ spec:
                     - region
                     - zoneName
                   properties:
+                    tags:
+                      type: object
+                      additionalProperties:
+                        type: string
+                      description: "FinOps tags applied to all resources in this capability"
                     providerConfigRef:
                       type: string
                       default: aws-provider

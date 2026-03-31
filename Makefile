@@ -38,7 +38,7 @@ security:
 	@go run github.com/securego/gosec/v2/cmd/gosec@latest -exclude=G101 -quiet ./...
 
 # Run E2E tests (requires Docker Compose)
-# Usage: make test-e2e [COVER=1]
+# Usage: make test-e2e [COVER=1] [KEEP_UP=1]
 test-e2e:
 	@echo "=== Tearing down any previous Docker Compose services ==="
 	@docker compose -f e2e/docker-compose.yml down -v --remove-orphans || true
@@ -84,6 +84,10 @@ else
 	GITEA_ADMIN_PASSWORD=admin-password \
 	go test -tags=e2e ./e2e/bootstrap -run TestRunE2E -v
 endif
+ifdef KEEP_UP
+	@echo "=== Keeping Docker Compose services up (skip teardown) ==="
+else
 	@echo "=== Cleaning up Docker Compose services ==="
 	@docker compose -f e2e/docker-compose.yml down
 	@rm -f release-engine
+endif

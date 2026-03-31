@@ -80,6 +80,23 @@ func (e *Engine) Render(params *ProvisionParams) ([]byte, error) {
 		}
 	}
 
+	// Inject FinOps tags from TagsFragment into capabilityParts so BuildXRs can
+	// forward them to every XR spec.parameters.tags field.
+	// TagsFragment renders either {"tags": {"tags": <map[string]string>}} or
+	// directly map[string]string depending on the renderer implementation.
+	if tagsRaw, ok := specParts["tags"]; ok {
+		switch tags := tagsRaw.(type) {
+		case map[string]any:
+			if innerTags, ok := tags["tags"].(map[string]string); ok && len(innerTags) > 0 {
+				capabilityParts["tags"] = innerTags
+			}
+		case map[string]string:
+			if len(tags) > 0 {
+				capabilityParts["tags"] = tags
+			}
+		}
+	}
+
 	docs, err := BuildXRs(params, capabilityParts)
 	if err != nil {
 		return nil, err

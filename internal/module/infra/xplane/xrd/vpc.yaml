@@ -29,6 +29,11 @@ spec:
                     - cidr
                     - region
                   properties:
+                    tags:
+                      type: object
+                      additionalProperties:
+                        type: string
+                      description: "FinOps tags applied to all resources in this capability"
                     region:
                       type: string
                       default: eu-west-1

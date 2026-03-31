@@ -44,6 +44,10 @@ spec:
                 storageEncrypted: true
                 autoMinorVersionUpgrade: true
                 backupRetentionPeriod: {{ $spec.backupRetentionDays }}
+                tags:
+                {{- with $spec.tags }}
+                {{- toYaml . | nindent 16 }}
+                {{- end }}
                 skipFinalSnapshot: false
                 deletionProtection: true
             {{- with $spec.engineVersion }}

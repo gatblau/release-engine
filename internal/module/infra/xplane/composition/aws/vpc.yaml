@@ -62,6 +62,9 @@ spec:
                 tags:
                   managed-by: crossplane
                   xr-name: {{ $name | quote }}
+                {{- with $params.tags }}
+                {{- toYaml . | nindent 18 }}
+                {{- end }}
 
             ---
             apiVersion: ec2.aws.m.upbound.io/v1beta1

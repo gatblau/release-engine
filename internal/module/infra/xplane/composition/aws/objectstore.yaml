@@ -45,6 +45,10 @@ spec:
                 kind: {{ $providerConfigKind }}
               forProvider:
                 region: {{ $region }}
+                tags:
+                {{- with $params.tags }}
+                {{- toYaml . | nindent 16 }}
+                {{- end }}
 
             ---
             apiVersion: s3.aws.m.upbound.io/v1beta1

@@ -318,6 +318,9 @@ Use the `test-e2e` Makefile target from the project root. This target handles:
 # Run E2E tests
 make test-e2e
 
+# Run without tearing down containers (use this to inspect the running services, data sources and outputs of the test)
+make test-e2e KEEP_UP=1
+
 # Run with coverage (generates coverage report in coverage/e2e.cover.out)
 make test-e2e COVER=1
 

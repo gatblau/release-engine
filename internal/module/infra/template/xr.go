@@ -131,35 +131,7 @@ func contains(list []string, item string) bool {
 
 // BuildXRs constructs Crossplane XR manifests per enabled capability.
 func BuildXRs(params *ProvisionParams, specParts map[string]any) ([]map[string]any, error) {
-	// Extract tags from specParts if available
-	var tags map[string]string
-	if tagsRaw, ok := specParts["tags"]; ok {
-		if tagsMap, ok := tagsRaw.(map[string]any); ok {
-			if tagsValue, ok := tagsMap["tags"]; ok {
-				if tagsMapValue, ok := tagsValue.(map[string]string); ok {
-					tags = tagsMapValue
-				}
-			}
-		}
-	}
-
-	// If tags not found via the above path, try direct extraction
-	if tags == nil {
-		if tagsRaw, ok := specParts["tags"]; ok {
-			// Try to convert various possible formats
-			switch v := tagsRaw.(type) {
-			case map[string]string:
-				tags = v
-			case map[string]any:
-				tags = make(map[string]string)
-				for key, val := range v {
-					if str, ok := val.(string); ok {
-						tags[key] = str
-					}
-				}
-			}
-		}
-	}
+	tags := extractTags(specParts)
 
 	keys := make([]string, 0, len(specParts))
 	for k := range specParts {
@@ -211,7 +183,7 @@ func BuildXRs(params *ProvisionParams, specParts map[string]any) ([]map[string]a
 
 		raw, _ := specParts[capability].(map[string]any)
 
-		// Merge tags into raw parameters if we have tags
+		// Merge tags into raw parameters so builders have access if needed
 		if len(tags) > 0 {
 			if raw == nil {
 				raw = make(map[string]any)
@@ -244,11 +216,70 @@ func BuildXRs(params *ProvisionParams, specParts map[string]any) ([]map[string]a
 			},
 			"spec": map[string]any{
 				"compositionRef": map[string]any{"name": compositionRef},
-				"parameters":     builder(params, raw),
+				"parameters":     mergeTagsIntoParameters(builder(params, raw), tags),
 			},
 		})
 	}
 	return docs, nil
+}
+
+func mergeTagsIntoParameters(params map[string]any, tags map[string]string) map[string]any {
+	if len(tags) == 0 {
+		return params
+	}
+	existing, _ := params["tags"].(map[string]string)
+	merged := make(map[string]string, len(existing)+len(tags))
+	for k, v := range existing {
+		merged[k] = v
+	}
+	for k, v := range tags {
+		merged[k] = v
+	}
+	params["tags"] = merged
+	return params
+}
+
+func extractTags(specParts map[string]any) map[string]string {
+	if specParts == nil {
+		return nil
+	}
+	tagsRaw, ok := specParts["tags"]
+	if !ok {
+		return nil
+	}
+	switch v := tagsRaw.(type) {
+	case map[string]string:
+		if len(v) == 0 {
+			return nil
+		}
+		return copyStringMap(v)
+	case map[string]any:
+		if inner, ok := v["tags"]; ok {
+			if strMap, ok := inner.(map[string]string); ok && len(strMap) > 0 {
+				return copyStringMap(strMap)
+			}
+		}
+		out := make(map[string]string)
+		for key, val := range v {
+			if str, ok := val.(string); ok {
+				out[key] = str
+			}
+		}
+		if len(out) == 0 {
+			return nil
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func copyStringMap(in map[string]string) map[string]string {
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 func marshalDeterministicDocuments(docs []map[string]any) ([]byte, error) {

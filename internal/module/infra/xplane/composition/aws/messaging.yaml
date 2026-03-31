@@ -49,6 +49,10 @@ spec:
                 fifoQueue: {{ $params.fifo | default false }}
                 sqsManagedSseEnabled: {{ $params.encryption | default true }}
                 messageRetentionSeconds: 1209600
+                tags:
+                {{- with $params.tags }}
+                {{- toYaml . | nindent 16 }}
+                {{- end }}
             {{- end }}
             {{- end }}
 
@@ -76,6 +80,10 @@ spec:
                 sqsManagedSseEnabled: {{ $params.encryption | default true }}
                 visibilityTimeoutSeconds: 30
                 messageRetentionSeconds: 345600
+                tags:
+                {{- with $params.tags }}
+                {{- toYaml . | nindent 16 }}
+                {{- end }}
                 {{- if $params.dlqEnabled }}
                 {{- $dlqKey := printf "dlq-%d" $i }}
                 {{- $dlqResource := index $observed $dlqKey }}
@@ -109,6 +117,10 @@ spec:
                 fifoTopic: {{ $params.fifo | default false }}
                 {{- if $params.encryption }}
                 kmsMasterKeyId: alias/aws/sns
+                {{- end }}
+                tags:
+                {{- with $params.tags }}
+                {{- toYaml . | nindent 16 }}
                 {{- end }}
             {{- end }}
 

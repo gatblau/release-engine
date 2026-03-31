@@ -49,6 +49,7 @@ func TestEngine_Render_IncludesAlwaysOnFragments(t *testing.T) {
 
 	out, err := engine.Render(p)
 	require.NoError(t, err)
+	t.Logf("rendered XR:\n%s", out)
 
 	var doc map[string]any
 	require.NoError(t, yaml.Unmarshal(out, &doc))
@@ -130,6 +131,48 @@ func TestEngine_Render_WithCatalogAppliesDefaults(t *testing.T) {
 	assert.NotNil(t, nodePool["instanceType"])
 }
 
+func TestEngine_Render_PropagatesFinOpsTags(t *testing.T) {
+	p := engineTestParams()
+	p.RequestName = "order-service-prod"
+	p.Owner = "checkout-team"
+	p.CostCentre = "CC-4521"
+	p.BusinessUnit = "retail"
+	p.Project = "checkout-replatform"
+	p.DataClassification = "confidential"
+	p.TTL = "2025-12-31"
+	p.ExtraTags = map[string]string{"application": "order-service"}
+	p.Kubernetes.Tier = "standard"
+	p.Kubernetes.Size = "medium"
+
+	engine := template.NewEngine(
+		&fragments.TagsFragment{},
+		&fragments.KubernetesFragment{},
+	)
+
+	out, err := engine.Render(p)
+	require.NoError(t, err)
+
+	var doc map[string]any
+	require.NoError(t, yaml.Unmarshal(out, &doc))
+	spec := doc["spec"].(map[string]any)
+	parameters := spec["parameters"].(map[string]any)
+	t.Logf("spec parameters: %+v", parameters)
+	tagsAny := parameters["tags"]
+	t.Logf("raw tags: %#v", tagsAny)
+	tags := extractStringTags(t, parameters)
+
+	assert.Equal(t, "CC-4521", tags["cost-centre"])
+	assert.Equal(t, "order-service-prod", tags["service"])
+	assert.Equal(t, "production", tags["environment"])
+	assert.Equal(t, "checkout-team", tags["owner"])
+	assert.Equal(t, "release-engine", tags["managed-by"])
+	assert.Equal(t, "retail", tags["business-unit"])
+	assert.Equal(t, "checkout-replatform", tags["project"])
+	assert.Equal(t, "confidential", tags["data-classification"])
+	assert.Equal(t, "2025-12-31", tags["ttl"])
+	assert.Equal(t, "order-service", tags["application"])
+}
+
 func TestEngine_Render_CatalogForbiddenCapability(t *testing.T) {
 	p := engineTestParams()
 	p.VM.Enabled = true
@@ -165,4 +208,19 @@ func TestEngine_Render_CatalogRequiredCapability(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "required")
 	assert.Contains(t, err.Error(), "objectStorage")
+}
+
+func extractStringTags(t *testing.T, parameters map[string]any) map[string]string {
+	t.Helper()
+	tagsAny, exists := parameters["tags"]
+	require.True(t, exists, "tags should be present on parameters")
+	tagsMap, ok := tagsAny.(map[string]string)
+	if ok {
+		return tagsMap
+	}
+	converted := make(map[string]string)
+	for k, v := range tagsAny.(map[string]any) {
+		converted[k] = v.(string)
+	}
+	return converted
 }
